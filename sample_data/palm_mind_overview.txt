@@ -1,0 +1,25 @@
+Palm Mind AI Enterprise Platform Overview
+
+1. Executive Summary
+Palm Mind AI (Palm Mind Technology) develops cutting-edge artificial intelligence solutions specializing in conversational intelligence, enterprise knowledge retrieval, and automated workflow orchestrations. Our mission is to bridge advanced foundation models with domain-specific enterprise data through secure, high-throughput retrieval augmented generation (RAG) architectures.
+
+2. Architecture and Data Processing
+The Palm Mind platform employs a multi-tiered ingestion and retrieval pipeline:
+- Document Ingestion: Ingests structured and unstructured files (.pdf, .txt, .docx, .html).
+- Chunking Layer: Supports Fixed-Size chunking with configurable overlap as well as Recursive Character chunking to respect semantic boundaries such as paragraphs and sentences.
+- Embedding Generation: Converts chunked segments into high-dimensional vector spaces using industry standard embedding models.
+- Vector Indexing: Stores and queries high-dimensional vectors utilizing top-tier vector databases such as Qdrant, Milvus, and Pinecone, ensuring sub-50ms approximate nearest neighbor search.
+- Relational Metadata Store: Tracks ingestion provenance, document hashes, chunk offsets, and operational metrics in transactional relational storage.
+
+3. Conversational RAG & Multi-Turn Dialogue
+The Conversational RAG system features:
+- State Management: Uses Redis for multi-turn conversational memory, enabling sub-millisecond retrieval of conversation history and contextual query rewriting.
+- Anaphora Resolution: Contextual query rewriting resolves ambiguous references and pronouns (such as "it", "they", "that proposal") before vector retrieval.
+- Grounded Synthesis: Combines retrieved passages with strict attribution prompts, ensuring zero hallucination and source citation.
+- Interview Scheduling: An embedded LLM-driven booking assistant identifies candidate scheduling intent and extracts candidate name, email, date, and preferred time to reserve interview slots.
+
+4. Hiring and Engineering Standards
+Palm Mind AI maintains rigorous engineering standards:
+- Type safety: Strict Python typing and Pydantic validation across all domain models.
+- Modular architecture: Clean separation of concerns between API routers, domain services, database models, and vector stores.
+- Testing: Comprehensive test suites ensuring high coverage across document extraction, chunking algorithms, memory persistence, and RAG execution.
