@@ -37,14 +37,14 @@ class DocumentIngestionService:
         filename = file.filename or "unknown_file.txt"
         file_ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
 
-        # 1. Check if the file extension is allowed (.pdf or .txt)
+        # Validate file extension
         if file_ext not in settings.ALLOWED_EXTENSIONS:
             raise InvalidFileTypeError(
                 f"File '{filename}' has unsupported extension '{file_ext}'. "
                 f"Allowed extensions are: {', '.join(settings.ALLOWED_EXTENSIONS)}"
             )
 
-        # 2. Read file content and check size limits
+        # Read content and enforce file size limits
         content = await file.read()
         file_size_bytes = len(content)
 
@@ -56,11 +56,11 @@ class DocumentIngestionService:
                 f"File size exceeds maximum limit of {settings.MAX_FILE_SIZE_BYTES} bytes."
             )
 
-        # 3. Extract text from the file (.pdf or .txt)
+        # Parse text from file based on whether it is PDF or plain text
         extracted_text, detected_type = TextExtractor.extract_text(filename, content)
         logger.info(f"Extracted {len(extracted_text)} characters from '{filename}'")
 
-        # 4. Split text into chunks using the chosen strategy (fixed_size or recursive_character)
+        # Partition text into chunks using selected strategy (fixed-size or recursive)
         c_size = chunk_size or settings.DEFAULT_CHUNK_SIZE
         c_overlap = chunk_overlap or settings.DEFAULT_CHUNK_OVERLAP
 
@@ -74,10 +74,10 @@ class DocumentIngestionService:
         if not text_chunks:
             raise DocumentExtractionError("No valid text chunks were produced from the document.")
 
-        # 5. Generate vector embeddings for all chunks
+        # Generate dense embeddings for each text chunk
         embeddings = await embedding_service.embed_texts(text_chunks)
 
-        # 6. Prepare data for Qdrant and SQL database
+        # Build records for vector storage and relational database
         doc_id = str(uuid.uuid4())
         col_name = settings.QDRANT_COLLECTION_NAME
 
@@ -88,7 +88,7 @@ class DocumentIngestionService:
         for idx, (chunk_text, vector) in enumerate(zip(text_chunks, embeddings)):
             vector_id = str(uuid.uuid4())
 
-            # Data for Qdrant vector store
+            # Data to index in Qdrant
             qdrant_payloads.append(
                 {
                     "vector_id": vector_id,
@@ -101,7 +101,7 @@ class DocumentIngestionService:
                 }
             )
 
-            # Record for SQL database
+            # Metadata record for SQL storage
             chunk_record = DocumentChunk(
                 id=str(uuid.uuid4()),
                 document_id=doc_id,
@@ -112,7 +112,7 @@ class DocumentIngestionService:
             )
             doc_chunk_models.append(chunk_record)
 
-            # Keep preview of first 3 chunks for API response
+            # Include a preview of the first few chunks in API response
             if idx < 3:
                 sample_chunks_info.append(
                     ChunkInfo(
@@ -123,10 +123,10 @@ class DocumentIngestionService:
                     )
                 )
 
-        # 7. Store embeddings in Qdrant
+        # Save vectors and payloads to Qdrant collection
         await vector_store.upsert_chunks(qdrant_payloads, collection_name=col_name)
 
-        # 8. Save document and chunk metadata in SQL database
+        # Persist document metadata in the relational database
         document_record = Document(
             id=doc_id,
             filename=filename,

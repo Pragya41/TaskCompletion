@@ -17,20 +17,20 @@ from app.services.vector_store import vector_store
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manages application startup and shutdown lifecycle."""
-    # 1. Initialize logging
+    # Configure console logging
     setup_logging(level="DEBUG" if settings.DEBUG else "INFO")
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}...")
 
-    # 2. Initialize relational database tables
+    # Create relational database tables if they do not exist
     await init_db()
 
-    # 3. Ensure Qdrant collection is ready
+    # Verify or initialize target vector collection in Qdrant
     try:
         vector_store.ensure_collection()
     except Exception as e:
         logger.warning(f"Qdrant collection check encountered an issue: {e}")
 
-    # 4. Check Redis connection
+    # Establish initial connection to Redis
     try:
         await chat_memory.get_client()
     except Exception as e:
@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Application startup sequence complete. Ready to receive requests.")
     yield
 
-    # Shutdown
+    # Release resources on shutdown
     logger.info("Shutting down application and freeing resources...")
     await chat_memory.close()
     logger.info("Application shutdown complete.")
@@ -59,7 +59,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware
+# Enable CORS for cross-origin client requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -68,7 +68,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Domain Exception Handler
+# Return structured JSON for domain-specific exceptions
 @app.exception_handler(AppBaseException)
 async def domain_exception_handler(request: Request, exc: AppBaseException) -> JSONResponse:
     logger.error(f"Domain error processing {request.method} {request.url.path}: {exc.message}")
@@ -82,7 +82,7 @@ async def domain_exception_handler(request: Request, exc: AppBaseException) -> J
     )
 
 
-# Unhandled Exception Handler: Never return raw str(e) on 500 errors to prevent leaking internal traces
+# Handle unexpected errors cleanly without leaking internal traces
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.error(f"Unhandled internal exception on {request.method} {request.url.path}: {exc}", exc_info=True)
@@ -119,7 +119,7 @@ async def health_check() -> JSONResponse:
     }
     is_healthy = True
 
-    # 1. Ping Database
+    # Check database connection
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
@@ -129,7 +129,7 @@ async def health_check() -> JSONResponse:
         health_details["database"] = "unhealthy"
         is_healthy = False
 
-    # 2. Ping Redis
+    # Check Redis connectivity
     try:
         client = await chat_memory.get_client()
         pong = await client.ping()
@@ -139,7 +139,7 @@ async def health_check() -> JSONResponse:
         health_details["redis"] = "unhealthy"
         is_healthy = False
 
-    # 3. Ping Qdrant
+    # Check Qdrant vector database
     try:
         vector_store.client.get_collections()
         health_details["qdrant"] = "connected"
@@ -153,5 +153,5 @@ async def health_check() -> JSONResponse:
     return JSONResponse(status_code=status_code, content=health_details)
 
 
-# Include API v1 router
+# Mount version 1 API endpoints
 app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)

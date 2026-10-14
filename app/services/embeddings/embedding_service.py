@@ -23,7 +23,7 @@ class EmbeddingService:
         self.model: str = model or settings.EMBEDDING_MODEL
         self.dimension: int = dimension or settings.VECTOR_DIMENSION
 
-        # Type explicitly as Optional[AsyncOpenAI] to resolve mypy error
+        # Initialize OpenAI async client
         self.client: Optional[AsyncOpenAI] = None
         if self.api_key:
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -33,7 +33,7 @@ class EmbeddingService:
         if not texts:
             return []
 
-        # 1. Use real OpenAI embeddings if client is configured
+        # Request embeddings from OpenAI if client is configured
         if self.client is not None:
             try:
                 response = await self.client.embeddings.create(
@@ -43,15 +43,15 @@ class EmbeddingService:
                 return [data.embedding for data in response.data]
             except Exception as e:
                 logger.error(f"OpenAI embedding generation failed: {e}", exc_info=True)
-                # Never silently fall back if a real key was provided; fail loudly to avoid corrupting vectors
+                # Fail loudly to prevent storing fake vectors alongside real embeddings
                 raise AppBaseException(f"Failed to generate OpenAI embeddings: {str(e)}") from e
 
-        # 2. If no API key is provided, check if mock mode is explicitly permitted (test suite only)
+        # Generate deterministic unit vectors when running offline test suite
         if settings.MOCK_LLM_IF_NO_KEY:
             logger.debug("Generating deterministic unit embeddings for offline testing.")
             return [self._generate_deterministic_vector(text) for text in texts]
 
-        # 3. Otherwise raise clear error instructing the user to configure OPENAI_API_KEY
+        # Require a valid API key if not in mock test mode
         raise AppBaseException(
             "OPENAI_API_KEY is not configured. Please supply a valid OpenAI API key in your .env file "
             "to generate embeddings with text-embedding-3-small."

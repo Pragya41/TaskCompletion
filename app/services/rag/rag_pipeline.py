@@ -30,22 +30,21 @@ class ConversationalRAGPipeline:
         session_id = request.session_id
         raw_query = request.query.strip()
 
-        # 1. Check if a booking is currently in progress via Redis state flag
+        # Check if an interview booking is currently underway
         session_state = await chat_memory.get_session_state(session_id)
         is_booking_in_progress = (session_state == "BOOKING_IN_PROGRESS")
 
-        # 2. Get recent chat history from Redis
+        # Load recent dialogue history to keep conversational context
         chat_history = await chat_memory.get_formatted_history(session_id, limit=6)
 
-        # 3. Save the incoming user message into Redis
+        # Record the user's incoming message in Redis memory
         await chat_memory.add_message(
             session_id=session_id,
             role=ChatRole.USER,
             content=raw_query,
         )
 
-        # 4. Check for interview booking intent
-        # If not in progress, only the latest query triggers booking intent (prevents re-triggering on old history)
+        # Detect if the user wants to schedule an interview
         booking_intent = await llm_service.extract_booking_intent(
             query=raw_query,
             is_booking_in_progress=is_booking_in_progress,
@@ -53,9 +52,9 @@ class ConversationalRAGPipeline:
         )
 
         if booking_intent.is_booking_intent:
-            # Case A: All required details (name, email, date, time) are present
+            # Check if all four required fields were collected
             if not booking_intent.missing_fields and booking_intent.name and booking_intent.email and booking_intent.date and booking_intent.time:
-                # Validate details using BookingCreate schema (checks future date & valid time)
+                # Validate date and time formats before saving
                 try:
                     booking_in = BookingCreate(
                         name=booking_intent.name,
@@ -66,7 +65,7 @@ class ConversationalRAGPipeline:
                         notes=f"Scheduled via Conversational RAG agent. Query: {raw_query}",
                     )
                 except ValidationError as val_err:
-                    # Catch date/time validation errors and reply with a conversational error message
+                    # Provide friendly feedback if the date is in the past or time format is invalid
                     first_err = val_err.errors()[0]
                     raw_msg = first_err.get("msg", "Please provide a valid future date and time.")
                     clean_msg = raw_msg.replace("Value error, ", "").strip()
@@ -76,7 +75,7 @@ class ConversationalRAGPipeline:
                         f"Could you please provide an updated date or time?"
                     )
 
-                    # Keep booking state in progress in Redis so user can reply with the corrected value
+                    # Keep booking state active so user can reply with corrected details
                     await chat_memory.set_session_state(session_id, "BOOKING_IN_PROGRESS")
                     await chat_memory.add_message(
                         session_id=session_id,
@@ -93,14 +92,14 @@ class ConversationalRAGPipeline:
                         booking=None,
                     )
 
-                # Save the booking in the SQL database
+                # Persist the confirmed booking in the database
                 logger.info(f"Booking interview for candidate {booking_in.name} (session: {session_id})")
                 booking_record = await booking_service.create_booking(db=db, booking_in=booking_in)
 
-                # Clear in-progress flag in Redis now that booking is complete
+                # Reset booking state flag since booking is complete
                 await chat_memory.clear_session_state(session_id)
 
-                # Prepare confirmation message for candidate
+                # Send confirmation details and reference ID back to candidate
                 confirmation_msg = (
                     f"Your interview has been scheduled successfully!\n\n"
                     f"• Candidate: {booking_record.name}\n"
@@ -112,7 +111,7 @@ class ConversationalRAGPipeline:
                     f"A confirmation has been recorded. Please let me know if you need to reschedule or have any questions about the position."
                 )
 
-                # Save the assistant response in Redis
+                # Store assistant confirmation in Redis
                 await chat_memory.add_message(
                     session_id=session_id,
                     role=ChatRole.ASSISTANT,
@@ -128,7 +127,7 @@ class ConversationalRAGPipeline:
                     booking=BookingResponse.model_validate(booking_record),
                 )
             else:
-                # Case B: Some details are missing; mark state as in-progress and prompt user
+                # Flag booking as in-progress and ask user for missing details
                 await chat_memory.set_session_state(session_id, "BOOKING_IN_PROGRESS")
 
                 missing_str = ", ".join(booking_intent.missing_fields)
@@ -137,7 +136,7 @@ class ConversationalRAGPipeline:
                     f"could you please provide the following missing details: {missing_str}?"
                 )
 
-                # Save assistant clarification request in Redis
+                # Store question in Redis
                 await chat_memory.add_message(
                     session_id=session_id,
                     role=ChatRole.ASSISTANT,
@@ -153,17 +152,17 @@ class ConversationalRAGPipeline:
                     booking=None,
                 )
 
-        # 5. If not a booking, ensure booking state is cleared
+        # Clear any stale booking state when user is not booking
         if is_booking_in_progress:
             await chat_memory.clear_session_state(session_id)
 
-        # 6. Rewrite the query using conversation history for better search
+        # Resolve ambiguous references and pronouns using conversation context
         rewritten_query = await llm_service.rewrite_query(
             query=raw_query,
             chat_history=chat_history,
         )
 
-        # 7. Convert query to vector embedding and search Qdrant for matching chunks
+        # Convert question into vector embedding and search Qdrant for matching chunks
         query_vector = await embedding_service.embed_query(rewritten_query)
         retrieved_hits = await vector_store.search(
             query_vector=query_vector,
@@ -171,7 +170,7 @@ class ConversationalRAGPipeline:
             document_id=request.document_id,
         )
 
-        # 8. Build sources list for citations
+        # Attach source metadata for document attribution
         sources = [
             RetrievedSource(
                 document_id=hit["document_id"],
@@ -183,14 +182,14 @@ class ConversationalRAGPipeline:
             for hit in retrieved_hits
         ]
 
-        # 9. Generate grounded answer with LLM using the retrieved chunks
+        # Synthesize answer using only the retrieved document context
         answer = await llm_service.generate_rag_answer(
             query=rewritten_query,
             context_chunks=retrieved_hits,
             chat_history=chat_history,
         )
 
-        # 10. Save the final assistant answer into Redis
+        # Save assistant answer to memory for future conversational turns
         await chat_memory.add_message(
             session_id=session_id,
             role=ChatRole.ASSISTANT,

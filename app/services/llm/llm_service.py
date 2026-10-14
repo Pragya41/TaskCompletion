@@ -22,13 +22,14 @@ class LLMService:
         self.base_url: Optional[str] = base_url or settings.OPENAI_BASE_URL
         self.model: str = model or settings.LLM_MODEL
 
-        # Type explicitly as Optional[AsyncOpenAI] to resolve mypy error
+        # Initialize OpenAI client if key is available
         self.client: Optional[AsyncOpenAI] = None
         if self.api_key:
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
     async def rewrite_query(self, query: str, chat_history: str) -> str:
         """Rewrite a follow-up query into a standalone question using chat history."""
+        # Return query directly if there is no conversation history
         if not chat_history.strip():
             return query
 
@@ -64,20 +65,14 @@ class LLMService:
         is_booking_in_progress: bool = False,
         chat_history: str = "",
     ) -> BookingIntentExtraction:
-        """Detect if user is booking an interview.
-
-        Fixes Bug 4: Does NOT scan the whole chat history for booking intent unless a booking is currently in progress.
-        If a booking is not in progress, only the user's latest query determines booking intent.
-        """
-        # Determine context to analyze
+        """Detect if user is booking an interview and extract candidate details."""
+        # If booking is already active, consider history to grab follow-up fields
         if is_booking_in_progress:
-            # Booking is in progress (assistant just asked for missing details); check combined context
             context_to_analyze = f"{chat_history}\nUser: {query}".strip()
         else:
-            # No booking in progress; only examine the latest user query for intent
             context_to_analyze = query.strip()
 
-        # 1. Real LLM structured extraction via JSON mode
+        # Call OpenAI structured JSON extraction when client is active
         if self.client is not None:
             system_prompt = (
                 "You are an interview booking assistant. Analyze the user's input to determine if they want to book or schedule an interview, "
@@ -117,7 +112,7 @@ class LLMService:
                 if not settings.MOCK_LLM_IF_NO_KEY:
                     raise LLMServiceError(f"Interview booking extraction failed: {str(e)}") from e
 
-        # 2. Heuristic fallback (for test suite or zero-key mode)
+        # Fall back to pattern matching if operating in offline test mode
         return self._heuristic_extract_booking(query, is_booking_in_progress, chat_history)
 
     def _heuristic_extract_booking(
@@ -126,22 +121,21 @@ class LLMService:
         is_booking_in_progress: bool,
         chat_history: str,
     ) -> BookingIntentExtraction:
-        """Deterministic pattern matching to extract booking info without false-triggering on old history."""
+        """Simple pattern matching to extract booking info when LLM is unavailable."""
         booking_keywords = ["interview", "book", "schedule", "reserve", "slot", "appointment", "meeting"]
         has_direct_intent = any(keyword in query.lower() for keyword in booking_keywords)
 
-        # Only trigger booking intent if current query has intent OR booking was already in progress
+        # Skip booking extraction if no booking keyword is present and no booking is underway
         if not has_direct_intent and not is_booking_in_progress:
             return BookingIntentExtraction(is_booking_intent=False, missing_fields=[])
 
-        # Text to search for parameters: include recent history if booking was in progress
         text = f"{chat_history}\n{query}" if is_booking_in_progress else query
 
-        # 1. Extract email
+        # Parse email address
         email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
         email = email_match.group(0) if email_match else None
 
-        # 2. Extract date (YYYY-MM-DD or YYYY/MM/DD)
+        # Parse date in YYYY-MM-DD or YYYY/MM/DD formats
         date_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
         date = date_match.group(1) if date_match else None
         if not date:
@@ -150,13 +144,13 @@ class LLMService:
                 y, m, d = alt_date.groups()
                 date = f"{y}-{int(m):02d}-{int(d):02d}"
 
-        # 3. Extract time (e.g. 14:00, 2:00 PM)
+        # Parse time expression
         time_match = re.search(
             r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)|\d{1,2}:\d{2})\b", text
         )
         time = time_match.group(1) if time_match else None
 
-        # 4. Extract candidate name
+        # Parse candidate name
         name = None
         name_patterns = [
             r"(?:my name is|i am|name:)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
@@ -169,7 +163,7 @@ class LLMService:
                 name = n_match.group(1).strip()
                 break
 
-        # Check which required fields are missing
+        # Identify any missing mandatory parameters
         missing = []
         if not name:
             missing.append("name")
@@ -202,7 +196,7 @@ class LLMService:
                 "Please upload a relevant document or specify your query."
             )
 
-        # Build context string with numbered citations
+        # Assemble retrieved passages with clear source labels
         formatted_context = ""
         for i, chunk in enumerate(context_chunks, 1):
             filename = chunk.get("filename", "unknown")
@@ -223,7 +217,7 @@ class LLMService:
             user_content += f"Conversation History:\n{chat_history}\n\n"
         user_content += f"User Question: {query}"
 
-        # Call real OpenAI LLM
+        # Send grounded prompt to OpenAI
         if self.client is not None:
             try:
                 response = await self.client.chat.completions.create(
