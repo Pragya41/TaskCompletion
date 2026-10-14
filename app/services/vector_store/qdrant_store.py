@@ -16,22 +16,20 @@ from app.core.logging import logger
 
 
 class QdrantVectorStore:
-    """Service wrapper for Qdrant vector database operations.
-
-    Supports both remote Qdrant deployments (Docker / Cloud) and embedded local persistence.
-    """
+    """Handles storing and searching vectors in Qdrant (remote or embedded)."""
 
     def __init__(self):
         self._client: Optional[QdrantClient] = None
 
     @property
     def client(self) -> QdrantClient:
+        """Get or initialize the Qdrant client."""
         if self._client is None:
             self._client = self._init_client()
         return self._client
 
     def _init_client(self) -> QdrantClient:
-        """Initializes Qdrant client based on application configuration."""
+        """Connect to remote Qdrant URL if provided, otherwise use local disk storage."""
         if settings.QDRANT_URL:
             logger.info(f"Connecting to remote Qdrant at: {settings.QDRANT_URL}")
             return QdrantClient(
@@ -48,7 +46,7 @@ class QdrantVectorStore:
         collection_name: Optional[str] = None,
         dimension: Optional[int] = None,
     ) -> None:
-        """Ensures that the target collection exists with appropriate cosine vector configuration."""
+        """Create the Qdrant collection with Cosine distance if it doesn't exist."""
         col_name = collection_name or settings.QDRANT_COLLECTION_NAME
         dim = dimension or settings.VECTOR_DIMENSION
 
@@ -70,15 +68,7 @@ class QdrantVectorStore:
         chunks: List[Dict[str, Any]],
         collection_name: Optional[str] = None,
     ) -> List[str]:
-        """Upserts a list of text chunk embeddings and metadata into Qdrant.
-
-        Args:
-            chunks: List of dicts containing 'vector', 'text', 'document_id', 'filename', 'chunk_index'.
-            collection_name: Optional target collection.
-
-        Returns:
-            List of generated vector IDs.
-        """
+        """Save chunk vectors and metadata into Qdrant."""
         if not chunks:
             return []
 
@@ -88,6 +78,7 @@ class QdrantVectorStore:
         points: List[PointStruct] = []
         vector_ids: List[str] = []
 
+        # Build PointStruct for each chunk
         for chunk in chunks:
             point_id = chunk.get("vector_id") or str(uuid.uuid4())
             vector_ids.append(point_id)
@@ -108,6 +99,7 @@ class QdrantVectorStore:
                 )
             )
 
+        # Batch upsert to Qdrant
         try:
             self.client.upsert(
                 collection_name=col_name,
@@ -126,20 +118,11 @@ class QdrantVectorStore:
         document_id: Optional[str] = None,
         collection_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Queries Qdrant for the most relevant text chunks.
-
-        Args:
-            query_vector: Dense embedding vector of the search query.
-            top_k: Number of most similar results to return.
-            document_id: Optional filter scoping retrieval to a specific document.
-            collection_name: Optional collection name.
-
-        Returns:
-            List of scored matches with metadata.
-        """
+        """Search Qdrant for the top_k most similar chunks to the query vector."""
         col_name = collection_name or settings.QDRANT_COLLECTION_NAME
         self.ensure_collection(col_name)
 
+        # Optional filter by document_id
         query_filter = None
         if document_id:
             query_filter = Filter(
@@ -151,6 +134,7 @@ class QdrantVectorStore:
                 ]
             )
 
+        # Run vector query
         try:
             response = self.client.query_points(
                 collection_name=col_name,
@@ -183,7 +167,7 @@ class QdrantVectorStore:
         document_id: str,
         collection_name: Optional[str] = None,
     ) -> None:
-        """Deletes all chunks belonging to a document from Qdrant."""
+        """Delete all chunks belonging to a document."""
         col_name = collection_name or settings.QDRANT_COLLECTION_NAME
         try:
             self.client.delete(
@@ -201,5 +185,5 @@ class QdrantVectorStore:
             logger.warning(f"Could not delete Qdrant points for doc {document_id}: {e}")
 
 
-# Global singleton instance
+# Singleton instance
 vector_store = QdrantVectorStore()

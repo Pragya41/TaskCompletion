@@ -11,33 +11,35 @@ from app.schemas.chat import ChatMessage, ChatRole
 
 
 class RedisChatMemory:
-    """Manages multi-turn conversation memory stored in Redis."""
+    """Manages chat history in Redis with automatic TTL and fakeredis fallback."""
 
     def __init__(self):
         self._client: Optional[aioredis.Redis] = None
         self._is_fake = False
 
     async def get_client(self) -> aioredis.Redis:
-        """Returns the active Redis client, lazily connecting or falling back to in-memory fake."""
+        """Connect to Redis, or use in-memory fakeredis if Redis is not running."""
         if self._client is not None:
             return self._client
 
         try:
+            # Try connecting to standalone Redis
             client = aioredis.from_url(
                 settings.REDIS_URL,
                 decode_responses=True,
                 socket_connect_timeout=2.0,
             )
-            # Test connection
             await client.ping()
             logger.info(f"Connected to Redis at {settings.REDIS_URL}")
             self._client = client
             self._is_fake = False
             return self._client
+
         except Exception as e:
+            # Fallback to fakeredis for zero-dependency local testing
             if settings.ALLOW_IN_MEMORY_REDIS_FALLBACK:
                 logger.warning(
-                    f"Could not connect to Redis server ({e}). Utilizing in-memory FakeRedis for seamless development/testing."
+                    f"Could not connect to Redis server ({e}). Using in-memory FakeRedis for local development."
                 )
                 self._client = fakeredis.aioredis.FakeRedis(decode_responses=True)
                 self._is_fake = True
@@ -47,6 +49,7 @@ class RedisChatMemory:
                 raise RedisMemoryError(f"Redis connection failed: {str(e)}") from e
 
     def _get_key(self, session_id: str) -> str:
+        """Redis key for session messages."""
         return f"palm_mind:chat:{session_id}:messages"
 
     async def add_message(
@@ -55,7 +58,7 @@ class RedisChatMemory:
         role: ChatRole,
         content: str,
     ) -> ChatMessage:
-        """Appends a new message to the session's conversational history."""
+        """Save a new user or assistant message to Redis."""
         client = await self.get_client()
         key = self._get_key(session_id)
 
@@ -66,6 +69,7 @@ class RedisChatMemory:
         )
 
         try:
+            # Convert to JSON and push to Redis list
             payload = json.dumps(
                 {
                     "role": msg.role.value,
@@ -74,9 +78,11 @@ class RedisChatMemory:
                 }
             )
             await client.rpush(key, payload)
-            # Refresh TTL
+
+            # Refresh TTL on the session key
             await client.expire(key, settings.REDIS_CHAT_TTL_SECONDS)
             return msg
+
         except Exception as e:
             logger.error(f"Error persisting message to Redis for session {session_id}: {e}")
             raise RedisMemoryError(f"Failed to save message to Redis: {str(e)}") from e
@@ -86,12 +92,12 @@ class RedisChatMemory:
         session_id: str,
         limit: int = 10,
     ) -> List[ChatMessage]:
-        """Retrieves the most recent messages for a session."""
+        """Get the most recent messages for a session."""
         client = await self.get_client()
         key = self._get_key(session_id)
 
         try:
-            # Fetch last 'limit' messages
+            # Get last 'limit' messages using negative indices
             start = -limit if limit > 0 else 0
             raw_items = await client.lrange(key, start, -1)
             messages: List[ChatMessage] = []
@@ -106,12 +112,13 @@ class RedisChatMemory:
                     )
                 )
             return messages
+
         except Exception as e:
             logger.error(f"Error reading chat history from Redis for session {session_id}: {e}")
             raise RedisMemoryError(f"Failed to read messages from Redis: {str(e)}") from e
 
     async def get_formatted_history(self, session_id: str, limit: int = 6) -> str:
-        """Returns dialogue formatted as 'User: ... \nAssistant: ...' for LLM context."""
+        """Format history as 'User: ... \\nAssistant: ...' for the LLM."""
         messages = await self.get_messages(session_id, limit=limit)
         if not messages:
             return ""
@@ -124,7 +131,7 @@ class RedisChatMemory:
         return "\n".join(formatted_lines)
 
     async def clear_history(self, session_id: str) -> bool:
-        """Clears all conversation memory for the given session."""
+        """Delete all chat history for a session."""
         client = await self.get_client()
         key = self._get_key(session_id)
         try:
@@ -135,11 +142,11 @@ class RedisChatMemory:
             raise RedisMemoryError(f"Failed to clear history from Redis: {str(e)}") from e
 
     async def close(self) -> None:
-        """Closes the Redis client connection."""
+        """Close Redis connection."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
 
 
-# Global singleton instance
+# Singleton instance
 chat_memory = RedisChatMemory()

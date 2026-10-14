@@ -10,7 +10,7 @@ from app.schemas.booking import BookingIntentExtraction
 
 
 class LLMService:
-    """Service handling interactions with the LLM for query rewriting, RAG generation, and booking intent extraction."""
+    """Handles LLM operations: query rewriting, interview booking extraction, and RAG answering."""
 
     def __init__(
         self,
@@ -22,16 +22,15 @@ class LLMService:
         self.base_url = base_url or settings.OPENAI_BASE_URL
         self.model = model or settings.LLM_MODEL
 
+        # Initialize OpenAI client if key is available
         if self.api_key:
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
         else:
             self.client = None
 
     async def rewrite_query(self, query: str, chat_history: str) -> str:
-        """Rewrites a contextual multi-turn user query into a standalone search query.
-
-        Resolves pronouns and references based on previous conversation turns.
-        """
+        """Rewrite a follow-up query into a standalone question using chat history."""
+        # If no history, the question is already standalone
         if not chat_history.strip():
             return query
 
@@ -57,18 +56,15 @@ class LLMService:
             except Exception as e:
                 logger.warning(f"LLM rewrite query failed ({e}). Using raw query.")
 
-        # Fallback heuristic: If raw query has ambiguous pronouns and history exists, append key context
         return query
 
     async def extract_booking_intent(
         self, query: str, chat_history: str = ""
     ) -> BookingIntentExtraction:
-        """Detects whether the user is trying to book an interview and extracts booking parameters:
-
-        (name, email, date, time).
-        """
+        """Detect if the user wants to book an interview and extract name, email, date, time."""
         full_conversation = f"{chat_history}\nUser: {query}".strip()
 
+        # Try LLM structured extraction first
         if self.client:
             system_prompt = (
                 "You are an interview booking assistant. Analyze the conversation and user's query to determine if they want to book or schedule an interview.\n"
@@ -104,11 +100,11 @@ class LLMService:
             except Exception as e:
                 logger.warning(f"LLM booking extraction failed ({e}). Falling back to pattern extraction.")
 
-        # Rule-based / regex extraction fallback for zero-API-key testing and robust offline evaluation
+        # Fallback regex pattern matching for offline/test mode
         return self._heuristic_extract_booking(query, chat_history)
 
     def _heuristic_extract_booking(self, query: str, chat_history: str) -> BookingIntentExtraction:
-        """Pattern-matching fallback to extract booking intent and parameters."""
+        """Simple pattern matching to extract booking info when LLM is unavailable."""
         combined_text = f"{chat_history} {query}".lower()
         booking_keywords = ["interview", "book", "schedule", "reserve", "slot", "appointment", "meeting"]
         has_intent = any(keyword in combined_text for keyword in booking_keywords)
@@ -118,27 +114,26 @@ class LLMService:
 
         text = f"{chat_history}\n{query}"
 
-        # Extract Email
+        # 1. Extract email
         email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
         email = email_match.group(0) if email_match else None
 
-        # Extract Date (YYYY-MM-DD or MM/DD/YYYY or words)
+        # 2. Extract date (YYYY-MM-DD or YYYY/MM/DD)
         date_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
         date = date_match.group(1) if date_match else None
         if not date:
-            # Check alternative format like 2026/10/20
             alt_date = re.search(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b", text)
             if alt_date:
                 y, m, d = alt_date.groups()
                 date = f"{y}-{int(m):02d}-{int(d):02d}"
 
-        # Extract Time
+        # 3. Extract time (e.g. 14:00, 2:00 PM)
         time_match = re.search(
             r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)|\d{1,2}:\d{2})\b", text
         )
         time = time_match.group(1) if time_match else None
 
-        # Extract Name (heuristic: 'name is [Name]' or 'I am [Name]')
+        # 4. Extract candidate name
         name = None
         name_patterns = [
             r"(?:my name is|i am|name:)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
@@ -150,6 +145,7 @@ class LLMService:
                 name = n_match.group(1).strip()
                 break
 
+        # Check which required fields are missing
         missing = []
         if not name:
             missing.append("name")
@@ -175,16 +171,14 @@ class LLMService:
         context_chunks: List[Dict[str, Any]],
         chat_history: str = "",
     ) -> str:
-        """Custom RAG response generator.
-
-        Synthesizes an accurate answer grounded strictly in retrieved chunks and conversational context.
-        """
+        """Generate answer grounded in retrieved document chunks with citations."""
         if not context_chunks and not chat_history:
             return (
                 "I don't have enough context in the knowledge base to answer that question. "
                 "Please upload a relevant document or specify your query."
             )
 
+        # Build context string with numbered citations
         formatted_context = ""
         for i, chunk in enumerate(context_chunks, 1):
             filename = chunk.get("filename", "unknown")
@@ -205,6 +199,7 @@ class LLMService:
             user_content += f"Conversation History:\n{chat_history}\n\n"
         user_content += f"User Question: {query}"
 
+        # Call OpenAI LLM
         if self.client:
             try:
                 response = await self.client.chat.completions.create(
@@ -223,7 +218,7 @@ class LLMService:
                 if not settings.MOCK_LLM_IF_NO_KEY:
                     raise LLMServiceError(f"LLM generation failed: {str(e)}") from e
 
-        # Offline / Mock intelligent answer generator
+        # Mock fallback answer for offline testing
         if context_chunks:
             top_chunk = context_chunks[0]
             sources_cited = ", ".join(f"[{i+1}]" for i in range(len(context_chunks)))
@@ -236,5 +231,5 @@ class LLMService:
             return "Hello! I am Palm Mind AI assistant. How may I assist you with your documents or interview booking today?"
 
 
-# Global singleton instance
+# Singleton instance
 llm_service = LLMService()

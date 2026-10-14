@@ -19,13 +19,7 @@ from app.services.vector_store.qdrant_store import vector_store
 
 
 class ConversationalRAGPipeline:
-    """End-to-end custom Conversational RAG pipeline.
-
-    - Uses Redis for conversational memory.
-    - Resolves multi-turn query context without relying on RetrievalQAChain.
-    - Retrieves top-k semantically similar context from Qdrant.
-    - Detects and executes interview booking via LLM tool/intent extraction.
-    """
+    """Custom RAG pipeline handling chat memory, document search, and interview booking."""
 
     async def execute(
         self,
@@ -35,28 +29,28 @@ class ConversationalRAGPipeline:
         session_id = request.session_id
         raw_query = request.query.strip()
 
-        # Step 1: Retrieve prior conversation context from Redis
+        # 1. Get recent chat history from Redis
         chat_history = await chat_memory.get_formatted_history(session_id, limit=6)
 
-        # Step 2: Persist current user message into Redis memory
+        # 2. Save the user's message into Redis
         await chat_memory.add_message(
             session_id=session_id,
             role=ChatRole.USER,
             content=raw_query,
         )
 
-        # Step 3: Check for Interview Booking intent
+        # 3. Check if the user is asking to book an interview
         booking_intent = await llm_service.extract_booking_intent(
             query=raw_query,
             chat_history=chat_history,
         )
 
         if booking_intent.is_booking_intent:
+            # Case A: All required details (name, email, date, time) are provided
             if not booking_intent.missing_fields and booking_intent.name and booking_intent.email and booking_intent.date and booking_intent.time:
-                # All required booking parameters present -> Create booking in DB
-                logger.info(
-                    f"Interview booking intent confirmed with all parameters for session {session_id}"
-                )
+                logger.info(f"Booking interview for session {session_id}")
+
+                # Save the booking in the database
                 booking_in = BookingCreate(
                     name=booking_intent.name,
                     email=booking_intent.email,
@@ -67,6 +61,7 @@ class ConversationalRAGPipeline:
                 )
                 booking_record = await booking_service.create_booking(db=db, booking_in=booking_in)
 
+                # Prepare confirmation message for the candidate
                 confirmation_msg = (
                     f"Your interview has been scheduled successfully!\n\n"
                     f"• Candidate: {booking_record.name}\n"
@@ -78,7 +73,7 @@ class ConversationalRAGPipeline:
                     f"A confirmation has been recorded. Please let me know if you need to reschedule or have any questions about the position."
                 )
 
-                # Save assistant reply to Redis
+                # Save the assistant response in Redis
                 await chat_memory.add_message(
                     session_id=session_id,
                     role=ChatRole.ASSISTANT,
@@ -94,13 +89,14 @@ class ConversationalRAGPipeline:
                     booking=BookingResponse.model_validate(booking_record),
                 )
             else:
-                # Booking intent present, but missing details -> prompt user
+                # Case B: Some details are missing, ask the user to provide them
                 missing_str = ", ".join(booking_intent.missing_fields)
                 clarification_msg = (
                     f"I would be glad to help schedule your interview! To confirm the reservation, "
                     f"could you please provide the following missing details: {missing_str}?"
                 )
 
+                # Save assistant question in Redis
                 await chat_memory.add_message(
                     session_id=session_id,
                     role=ChatRole.ASSISTANT,
@@ -116,13 +112,13 @@ class ConversationalRAGPipeline:
                     booking=None,
                 )
 
-        # Step 4: Multi-turn Query Rewriting
+        # 4. If not a booking, rewrite the query using conversation history for better search
         rewritten_query = await llm_service.rewrite_query(
             query=raw_query,
             chat_history=chat_history,
         )
 
-        # Step 5: Vector Retrieval from Qdrant
+        # 5. Convert query to vector embedding and search Qdrant for matching chunks
         query_vector = await embedding_service.embed_query(rewritten_query)
         retrieved_hits = await vector_store.search(
             query_vector=query_vector,
@@ -130,6 +126,7 @@ class ConversationalRAGPipeline:
             document_id=request.document_id,
         )
 
+        # 6. Build the sources list for citations
         sources = [
             RetrievedSource(
                 document_id=hit["document_id"],
@@ -141,14 +138,14 @@ class ConversationalRAGPipeline:
             for hit in retrieved_hits
         ]
 
-        # Step 6: Custom RAG Answer Generation
+        # 7. Generate grounded answer with LLM using the retrieved chunks
         answer = await llm_service.generate_rag_answer(
             query=rewritten_query,
             context_chunks=retrieved_hits,
             chat_history=chat_history,
         )
 
-        # Step 7: Persist assistant answer to Redis memory
+        # 8. Save the final assistant answer into Redis
         await chat_memory.add_message(
             session_id=session_id,
             role=ChatRole.ASSISTANT,
@@ -165,5 +162,5 @@ class ConversationalRAGPipeline:
         )
 
 
-# Global singleton instance
+# Singleton instance
 rag_pipeline = ConversationalRAGPipeline()

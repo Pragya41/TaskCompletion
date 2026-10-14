@@ -24,10 +24,7 @@ from app.services.vector_store import vector_store
 
 
 class DocumentIngestionService:
-    """Orchestrates end-to-end document parsing, chunking, embedding generation,
-
-    vector persistence in Qdrant, and relational metadata storage in SQL.
-    """
+    """Handles file upload, text extraction, chunking, embeddings, and database storage."""
 
     async def ingest_document(
         self,
@@ -40,13 +37,14 @@ class DocumentIngestionService:
         filename = file.filename or "unknown_file.txt"
         file_ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
 
+        # 1. Check if the file extension is allowed (.pdf or .txt)
         if file_ext not in settings.ALLOWED_EXTENSIONS:
             raise InvalidFileTypeError(
                 f"File '{filename}' has unsupported extension '{file_ext}'. "
                 f"Allowed extensions are: {', '.join(settings.ALLOWED_EXTENSIONS)}"
             )
 
-        # Read file bytes
+        # 2. Read file content and check size limits
         content = await file.read()
         file_size_bytes = len(content)
 
@@ -55,16 +53,14 @@ class DocumentIngestionService:
 
         if file_size_bytes > settings.MAX_FILE_SIZE_BYTES:
             raise DocumentExtractionError(
-                f"File size ({file_size_bytes} bytes) exceeds maximum allowable limit of {settings.MAX_FILE_SIZE_BYTES} bytes."
+                f"File size exceeds maximum limit of {settings.MAX_FILE_SIZE_BYTES} bytes."
             )
 
-        # 1. Extract text
+        # 3. Extract text from the file (.pdf or .txt)
         extracted_text, detected_type = TextExtractor.extract_text(filename, content)
-        logger.info(
-            f"Extracted {len(extracted_text)} characters from '{filename}' (type: {detected_type})"
-        )
+        logger.info(f"Extracted {len(extracted_text)} characters from '{filename}'")
 
-        # 2. Chunk text using the selected strategy
+        # 4. Split text into chunks using the chosen strategy (fixed_size or recursive_character)
         c_size = chunk_size or settings.DEFAULT_CHUNK_SIZE
         c_overlap = chunk_overlap or settings.DEFAULT_CHUNK_OVERLAP
 
@@ -78,15 +74,10 @@ class DocumentIngestionService:
         if not text_chunks:
             raise DocumentExtractionError("No valid text chunks were produced from the document.")
 
-        logger.info(
-            f"Generated {len(text_chunks)} chunks using strategy '{chunking_strategy.value}' "
-            f"(size={c_size}, overlap={c_overlap})"
-        )
-
-        # 3. Generate embeddings
+        # 5. Generate vector embeddings for all chunks
         embeddings = await embedding_service.embed_texts(text_chunks)
 
-        # 4. Prepare data for vector store & relational DB
+        # 6. Prepare data for Qdrant and SQL database
         doc_id = str(uuid.uuid4())
         col_name = settings.QDRANT_COLLECTION_NAME
 
@@ -96,6 +87,8 @@ class DocumentIngestionService:
 
         for idx, (chunk_text, vector) in enumerate(zip(text_chunks, embeddings)):
             vector_id = str(uuid.uuid4())
+
+            # Data for Qdrant vector store
             qdrant_payloads.append(
                 {
                     "vector_id": vector_id,
@@ -108,6 +101,7 @@ class DocumentIngestionService:
                 }
             )
 
+            # Record for SQL database
             chunk_record = DocumentChunk(
                 id=str(uuid.uuid4()),
                 document_id=doc_id,
@@ -118,6 +112,7 @@ class DocumentIngestionService:
             )
             doc_chunk_models.append(chunk_record)
 
+            # Keep preview of first 3 chunks for API response
             if idx < 3:
                 sample_chunks_info.append(
                     ChunkInfo(
@@ -128,10 +123,10 @@ class DocumentIngestionService:
                     )
                 )
 
-        # 5. Persist to Qdrant vector database
+        # 7. Store embeddings in Qdrant
         await vector_store.upsert_chunks(qdrant_payloads, collection_name=col_name)
 
-        # 6. Persist metadata in SQL Database
+        # 8. Save document and chunk metadata in SQL database
         document_record = Document(
             id=doc_id,
             filename=filename,
@@ -173,7 +168,7 @@ class DocumentIngestionService:
         limit: int = 50,
         offset: int = 0,
     ) -> List[Document]:
-        """Lists all ingested documents in the system."""
+        """Fetch all uploaded documents."""
         stmt = (
             select(Document)
             .order_by(Document.created_at.desc())
@@ -188,11 +183,11 @@ class DocumentIngestionService:
         document_id: str,
         db: AsyncSession,
     ) -> Optional[Document]:
-        """Fetches document metadata including its chunks."""
+        """Fetch a single document by its ID."""
         stmt = select(Document).where(Document.id == document_id)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
 
-# Global singleton instance
+# Singleton instance
 ingestion_service = DocumentIngestionService()
