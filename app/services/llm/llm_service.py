@@ -145,26 +145,31 @@ class LLMService:
 
         text = f"{chat_history}\n{query}" if is_booking_in_progress else query
 
-        # Parse email address
-        email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
-        email = email_match.group(0) if email_match else None
+        # Parse email address:
+        # Use re.findall and pick the last occurrence ([-1]) so that if a user corrects
+        # a previously mistyped email in a follow-up turn, the newest email takes precedence
+        email_matches = re.findall(r"[\w\.-]+@[\w\.-]+\.\w+", text)
+        email = email_matches[-1] if email_matches else None
 
-        # Parse date in YYYY-MM-DD or YYYY/MM/DD formats
-        date_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
-        date = date_match.group(1) if date_match else None
+        # Parse date in YYYY-MM-DD or YYYY/MM/DD formats:
+        # Pick the latest date found in the dialogue so candidate date corrections take precedence
+        date_matches = re.findall(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+        date = date_matches[-1] if date_matches else None
         if not date:
-            alt_date = re.search(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b", text)
-            if alt_date:
-                y, m, d = alt_date.groups()
+            alt_dates = re.findall(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b", text)
+            if alt_dates:
+                y, m, d = alt_dates[-1]
                 date = f"{y}-{int(m):02d}-{int(d):02d}"
 
-        # Parse time expression
-        time_match = re.search(
+        # Parse time expression:
+        # Pick the latest time occurrence to ensure updated time slots override earlier ones
+        time_matches = re.findall(
             r"\b(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)|\d{1,2}:\d{2})\b", text
         )
-        time = time_match.group(1) if time_match else None
+        time = time_matches[-1] if time_matches else None
 
-        # Parse candidate name
+        # Parse candidate name:
+        # Search using priority patterns and select the most recent match
         name = None
         name_patterns = [
             r"(?:my name is|i am|name:)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
@@ -172,9 +177,9 @@ class LLMService:
             r"\bfor\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b",
         ]
         for pattern in name_patterns:
-            n_match = re.search(pattern, text, re.IGNORECASE)
-            if n_match:
-                name = n_match.group(1).strip()
+            n_matches = re.findall(pattern, text, re.IGNORECASE)
+            if n_matches:
+                name = n_matches[-1].strip()
                 break
 
         # Identify any missing mandatory parameters

@@ -93,3 +93,26 @@ async def test_no_false_booking_intent_on_old_history():
     )
     # Must NOT be treated as a booking intent!
     assert extracted.is_booking_intent is False
+
+
+@pytest.mark.asyncio
+async def test_corrected_booking_details_precedence():
+    """Verify that when a user updates their date, time, or email, the latest details take precedence."""
+    history = (
+        "User: Book an interview for Pragya Dhital, pragya_old@example.com on 2020-01-01 at 10:00 AM\n"
+        "Assistant: That date is in the past. Could you please provide an updated date or time?"
+    )
+    correction_query = "Please change to pragya_new@example.com on 2026-11-20 at 3:00 PM."
+
+    extracted = await llm_service.extract_booking_intent(
+        query=correction_query,
+        is_booking_in_progress=True,
+        chat_history=history,
+    )
+
+    assert extracted.is_booking_intent is True
+    assert extracted.name == "Pragya Dhital"
+    assert extracted.email == "pragya_new@example.com"
+    assert extracted.date == "2026-11-20"
+    assert extracted.time == "3:00 PM"
+
