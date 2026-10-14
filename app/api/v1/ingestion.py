@@ -47,6 +47,12 @@ async def ingest_document(
     ),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentIngestResponse:
+    """Document Ingestion Endpoint:
+    Accepts multipart file upload, extracts clean text, partitions into chunks using
+    the selected chunking strategy (fixed-size vs recursive character), generates embeddings,
+    and indexes them into Qdrant alongside SQL relational metadata.
+    """
+    # Validate that chunk overlap is strictly less than total chunk size
     if chunk_overlap and chunk_size and chunk_overlap >= chunk_size:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -54,6 +60,7 @@ async def ingest_document(
         )
 
     try:
+        # Delegate document processing to the ingestion service
         response = await ingestion_service.ingest_document(
             file=file,
             chunking_strategy=chunking_strategy,
@@ -63,12 +70,16 @@ async def ingest_document(
         )
         return response
     except InvalidFileTypeError as e:
+        # Unsupported file extensions (e.g. .docx or .csv)
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(e))
     except DocumentExtractionError as e:
+        # Unreadable text or empty file
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except AppBaseException as e:
+        # Generic domain exception
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
+        # Unhandled internal error: log trace and return generic 500 error to avoid leaking internals
         logger.error(f"Unexpected error during document ingestion: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -37,14 +37,14 @@ class DocumentIngestionService:
         filename = file.filename or "unknown_file.txt"
         file_ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
 
-        # Validate file extension
+        # Validate file format against allowed extensions (.pdf, .txt)
         if file_ext not in settings.ALLOWED_EXTENSIONS:
             raise InvalidFileTypeError(
                 f"File '{filename}' has unsupported extension '{file_ext}'. "
                 f"Allowed extensions are: {', '.join(settings.ALLOWED_EXTENSIONS)}"
             )
 
-        # Read content and enforce file size limits
+        # Enforce file boundaries: read content and reject empty files or files exceeding max size limit
         content = await file.read()
         file_size_bytes = len(content)
 
@@ -56,11 +56,14 @@ class DocumentIngestionService:
                 f"File size exceeds maximum limit of {settings.MAX_FILE_SIZE_BYTES} bytes."
             )
 
-        # Parse text from file based on whether it is PDF or plain text
+        # Text extraction:
+        # Route file content to the appropriate extractor (pypdf for PDF, multi-encoding decoder for TXT)
         extracted_text, detected_type = TextExtractor.extract_text(filename, content)
         logger.info(f"Extracted {len(extracted_text)} characters from '{filename}'")
 
-        # Partition text into chunks using selected strategy (fixed-size or recursive)
+        # Chunking strategy execution:
+        # Instantiate either FixedSizeChunker or RecursiveCharacterChunker based on the caller's request,
+        # using specified or configured default chunk_size and chunk_overlap
         c_size = chunk_size or settings.DEFAULT_CHUNK_SIZE
         c_overlap = chunk_overlap or settings.DEFAULT_CHUNK_OVERLAP
 
@@ -74,10 +77,13 @@ class DocumentIngestionService:
         if not text_chunks:
             raise DocumentExtractionError("No valid text chunks were produced from the document.")
 
-        # Generate dense embeddings for each text chunk
+        # Vector embedding generation:
+        # Embed all extracted chunks concurrently using OpenAI text-embedding-3-small
         embeddings = await embedding_service.embed_texts(text_chunks)
 
-        # Build records for vector storage and relational database
+        # Dual-write preparation:
+        # Build vector payloads for Qdrant and relational entity models for PostgreSQL/SQLite
+        # Each chunk is linked to the parent document via document_id and stores its chunk_index
         doc_id = str(uuid.uuid4())
         col_name = settings.QDRANT_COLLECTION_NAME
 
@@ -88,7 +94,7 @@ class DocumentIngestionService:
         for idx, (chunk_text, vector) in enumerate(zip(text_chunks, embeddings)):
             vector_id = str(uuid.uuid4())
 
-            # Data to index in Qdrant
+            # Payload indexed directly into Qdrant vector database
             qdrant_payloads.append(
                 {
                     "vector_id": vector_id,
@@ -101,7 +107,7 @@ class DocumentIngestionService:
                 }
             )
 
-            # Metadata record for SQL storage
+            # Relational database record mapping the chunk text and vector ID
             chunk_record = DocumentChunk(
                 id=str(uuid.uuid4()),
                 document_id=doc_id,
@@ -112,7 +118,7 @@ class DocumentIngestionService:
             )
             doc_chunk_models.append(chunk_record)
 
-            # Include a preview of the first few chunks in API response
+            # Store preview of initial chunks to return in the ingestion response
             if idx < 3:
                 sample_chunks_info.append(
                     ChunkInfo(
@@ -123,10 +129,10 @@ class DocumentIngestionService:
                     )
                 )
 
-        # Save vectors and payloads to Qdrant collection
+        # Index vectors and metadata into Qdrant collection
         await vector_store.upsert_chunks(qdrant_payloads, collection_name=col_name)
 
-        # Persist document metadata in the relational database
+        # Commit document metadata and chunk records to the relational database
         document_record = Document(
             id=doc_id,
             filename=filename,

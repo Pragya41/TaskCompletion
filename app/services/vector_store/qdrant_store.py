@@ -29,7 +29,9 @@ class QdrantVectorStore:
         return self._client
 
     def _init_client(self) -> QdrantClient:
-        """Connect to remote Qdrant URL if provided, otherwise use local disk storage."""
+        # Connection routing:
+        # Connect to standalone Qdrant instance via HTTP if QDRANT_URL is set,
+        # otherwise use embedded file-based storage in ./qdrant_storage for quick local runs
         if settings.QDRANT_URL:
             logger.info(f"Connecting to remote Qdrant at: {settings.QDRANT_URL}")
             # Ensure timeout is typed as an int to satisfy mypy
@@ -47,7 +49,9 @@ class QdrantVectorStore:
         collection_name: Optional[str] = None,
         dimension: Optional[int] = None,
     ) -> None:
-        """Create the Qdrant collection with Cosine distance if it doesn't exist."""
+        # Collection configuration:
+        # Verifies that the collection exists. If not, initializes it with Cosine distance
+        # matching the 1536 dimensions produced by OpenAI text-embedding-3-small
         col_name = collection_name or settings.QDRANT_COLLECTION_NAME
         dim = dimension or settings.VECTOR_DIMENSION
 
@@ -69,7 +73,9 @@ class QdrantVectorStore:
         chunks: List[Dict[str, Any]],
         collection_name: Optional[str] = None,
     ) -> List[str]:
-        """Save chunk vectors and metadata into Qdrant."""
+        # Batch vector indexing:
+        # Constructs PointStruct instances bundling the embedding vector with a rich metadata payload
+        # (document ID, filename, chunk index, text), enabling self-contained retrieval
         if not chunks:
             return []
 
@@ -119,11 +125,13 @@ class QdrantVectorStore:
         document_id: Optional[str] = None,
         collection_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search Qdrant for the top_k most similar chunks to the query vector."""
+        # Semantic nearest neighbor query:
+        # Executes cosine distance search in Qdrant, optionally applying a metadata filter
+        # when a search is scoped to a specific document ID
         col_name = collection_name or settings.QDRANT_COLLECTION_NAME
         self.ensure_collection(col_name)
 
-        # Optional filter by document_id
+        # Build optional filter by document_id
         query_filter = None
         if document_id:
             query_filter = Filter(

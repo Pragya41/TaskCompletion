@@ -31,12 +31,21 @@ async def chat(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ChatResponse:
+    """Conversational RAG & automated interview scheduling endpoint:
+    Coordinates multi-turn dialogue with session-based memory in Redis.
+    Dispatches incoming queries to ConversationalRAGPipeline, which handles
+    booking intent classification, query rewriting, Qdrant semantic search,
+    and grounded answer generation.
+    """
     try:
+        # Delegate request processing to the custom RAG pipeline
         response = await rag_pipeline.execute(request=request, db=db)
         return response
     except AppBaseException as e:
+        # Known domain or validation error
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
+        # Log unexpected internal exceptions with stack trace and return safe generic 500 error
         logger.error(f"Unexpected error during conversational RAG: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

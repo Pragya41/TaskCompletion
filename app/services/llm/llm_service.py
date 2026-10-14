@@ -28,8 +28,13 @@ class LLMService:
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
     async def rewrite_query(self, query: str, chat_history: str) -> str:
-        """Rewrite a follow-up query into a standalone question using chat history."""
-        # Return query directly if there is no conversation history
+        """Conversational query reformulation:
+        In multi-turn conversations, follow-up questions often contain pronouns or omissions
+        (e.g., 'What are its key benefits?' or 'Tell me more about the first one').
+        This method rephrases the query into a standalone question containing full context
+        so that downstream vector similarity search finds the most relevant document chunks.
+        """
+        # Return query directly if there is no conversation history to resolve
         if not chat_history.strip():
             return query
 
@@ -65,8 +70,17 @@ class LLMService:
         is_booking_in_progress: bool = False,
         chat_history: str = "",
     ) -> BookingIntentExtraction:
-        """Detect if user is booking an interview and extract candidate details."""
-        # If booking is already active, consider history to grab follow-up fields
+        """Interview booking extraction:
+        Analyzes the user's message to identify scheduling intent and extract candidate fields
+        (name, email, date, time).
+        
+        To prevent historical booking mentions from falsely capturing future normal questions,
+        we only incorporate the conversation history if a booking is actively in progress
+        (indicated by the session state flag in Redis).
+        """
+        # Context scoping:
+        # If a booking is currently underway, include chat history to resolve details supplied in pieces.
+        # Otherwise, only analyze the incoming query to prevent false-positive bookings.
         if is_booking_in_progress:
             context_to_analyze = f"{chat_history}\nUser: {query}".strip()
         else:
@@ -189,14 +203,19 @@ class LLMService:
         context_chunks: List[Dict[str, Any]],
         chat_history: str = "",
     ) -> str:
-        """Generate answer grounded in retrieved document chunks with citations."""
+        """Grounded answer generation:
+        Implements a custom RAG prompt template (without relying on LangChain's RetrievalQAChain)
+        that formats retrieved text chunks into labeled sources [1], [2], instructs the model
+        to strictly cite these sources, and enforces zero-hallucination policies if the answer
+        is not present in the ingested context.
+        """
         if not context_chunks and not chat_history:
             return (
                 "I don't have enough context in the knowledge base to answer that question. "
                 "Please upload a relevant document or specify your query."
             )
 
-        # Assemble retrieved passages with clear source labels
+        # Assemble retrieved passages with clear source labels and chunk indices
         formatted_context = ""
         for i, chunk in enumerate(context_chunks, 1):
             filename = chunk.get("filename", "unknown")
@@ -204,6 +223,7 @@ class LLMService:
             text = chunk.get("text", "")
             formatted_context += f"--- Source [{i}] (File: {filename}, Chunk: {chunk_idx}) ---\n{text}\n\n"
 
+        # Grounded system prompt enforcing citations and preventing hallucinations
         system_prompt = (
             "You are Palm Mind AI, an intelligent, professional technical assistant. "
             "Answer the user's inquiry based strictly on the retrieved context below. "
@@ -212,12 +232,13 @@ class LLMService:
             f"Retrieved Context:\n{formatted_context if formatted_context else 'No document context available.'}"
         )
 
+        # Append prior conversation history to maintain contextual continuity
         user_content = ""
         if chat_history.strip():
             user_content += f"Conversation History:\n{chat_history}\n\n"
         user_content += f"User Question: {query}"
 
-        # Send grounded prompt to OpenAI
+        # Send grounded prompt to OpenAI chat completions API
         if self.client is not None:
             try:
                 response = await self.client.chat.completions.create(

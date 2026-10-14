@@ -23,7 +23,7 @@ class RedisChatMemory:
             return self._client
 
         try:
-            # Try connecting to standalone Redis
+            # Connect to live Redis server
             client = aioredis.from_url(
                 settings.REDIS_URL,
                 decode_responses=True,
@@ -62,7 +62,10 @@ class RedisChatMemory:
         role: ChatRole,
         content: str,
     ) -> ChatMessage:
-        """Save a new user or assistant message to Redis."""
+        # Dialogue turn persistence:
+        # Appends the message to the right side of the Redis list for this session ID,
+        # then refreshes the session expiration TTL (defaults to 24 hours) to keep active
+        # conversations cached while automatically garbage collecting stale chats
         client = await self.get_client()
         key = self._get_key(session_id)
 
@@ -96,12 +99,13 @@ class RedisChatMemory:
         session_id: str,
         limit: int = 10,
     ) -> List[ChatMessage]:
-        """Get the most recent messages for a session."""
+        # Sliding conversation history window:
+        # Retrieves the N most recent message records using negative indexing with lrange
+        # so that memory consumption remains bounded regardless of conversation length
         client = await self.get_client()
         key = self._get_key(session_id)
 
         try:
-            # Get last 'limit' messages using negative indices
             start = -limit if limit > 0 else 0
             raw_items = await client.lrange(key, start, -1)
             messages: List[ChatMessage] = []
@@ -122,7 +126,7 @@ class RedisChatMemory:
             raise RedisMemoryError(f"Failed to read messages from Redis: {str(e)}") from e
 
     async def get_formatted_history(self, session_id: str, limit: int = 6) -> str:
-        """Format history as 'User: ... \\nAssistant: ...' for the LLM."""
+        """Format history as 'User: ... \\nAssistant: ...' for the LLM prompt."""
         messages = await self.get_messages(session_id, limit=limit)
         if not messages:
             return ""
@@ -135,7 +139,9 @@ class RedisChatMemory:
         return "\n".join(formatted_lines)
 
     async def get_session_state(self, session_id: str) -> Optional[str]:
-        """Retrieves conversational state flag from Redis (e.g. 'BOOKING_IN_PROGRESS')."""
+        # Session state query:
+        # Reads the active state flag for a conversation session (e.g. 'BOOKING_IN_PROGRESS')
+        # to determine if follow-up user input should be treated as booking details
         client = await self.get_client()
         key = self._get_state_key(session_id)
         try:
@@ -155,7 +161,7 @@ class RedisChatMemory:
             logger.warning(f"Error setting session state for {session_id}: {e}")
 
     async def clear_session_state(self, session_id: str) -> None:
-        """Deletes conversational state flag from Redis."""
+        """Deletes conversational state flag from Redis once booking flow completes."""
         client = await self.get_client()
         key = self._get_state_key(session_id)
         try:

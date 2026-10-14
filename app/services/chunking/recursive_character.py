@@ -27,11 +27,15 @@ class RecursiveCharacterChunker(BaseChunker):
         return self._split_text(cleaned, self.separators)
 
     def _split_text(self, text: str, separators: List[str]) -> List[str]:
-        """Split text using the best separator available."""
+        """Hierarchical text decomposition:
+        Attempts to split text using the coarsest available delimiter first (paragraphs),
+        recursing down to smaller boundaries (sentences, words) only when individual pieces
+        exceed the maximum chunk size.
+        """
         separator = separators[-1]
         new_separators: List[str] = []
 
-        # Find the highest priority separator that appears in text
+        # Find the highest priority separator present in the text
         for i, sep in enumerate(separators):
             if sep == "":
                 separator = ""
@@ -41,7 +45,7 @@ class RecursiveCharacterChunker(BaseChunker):
                 new_separators = separators[i + 1:]
                 break
 
-        # Split using the chosen separator
+        # Split using the selected separator
         if separator:
             splits = text.split(separator)
         else:
@@ -49,13 +53,17 @@ class RecursiveCharacterChunker(BaseChunker):
 
         good_splits: List[str] = [s for s in splits if s]
 
-        # Merge pieces back into chunks that fit chunk_size
+        # Combine smaller splits into chunks that fit chunk_size with overlap
         return self._merge_splits(good_splits, separator, new_separators)
 
     def _merge_splits(
         self, splits: List[str], separator: str, next_separators: List[str]
     ) -> List[str]:
-        """Combine splits into chunks under chunk_size with overlap."""
+        """Greedy accumulator with overlap:
+        Merges atomic text fragments into chunks that respect `chunk_size`.
+        When a chunk boundary is reached, it retains trailing fragments within
+        `chunk_overlap` to maintain semantic continuity between consecutive chunks.
+        """
         docs: List[str] = []
         current_doc: List[str] = []
         total_len = 0
@@ -63,7 +71,8 @@ class RecursiveCharacterChunker(BaseChunker):
         for split in splits:
             split_len = len(split)
 
-            # If a single split is still too large, split it further
+            # If a single split is still larger than chunk_size, recursively subdivide it
+            # using the next delimiter in the priority hierarchy
             if split_len > self.chunk_size:
                 if current_doc:
                     merged = separator.join(current_doc).strip()
@@ -90,7 +99,7 @@ class RecursiveCharacterChunker(BaseChunker):
                     if merged:
                         docs.append(merged)
 
-                    # Keep overlap from the end of current chunk
+                    # Carry forward trailing fragments to form the overlap for the next chunk
                     overlap_doc: List[str] = []
                     overlap_len = 0
                     for prev_split in reversed(current_doc):
@@ -104,11 +113,11 @@ class RecursiveCharacterChunker(BaseChunker):
                     current_doc = overlap_doc
                     total_len = overlap_len
 
-            # Add piece to current chunk buffer
+            # Add fragment to current accumulation buffer
             current_doc.append(split)
             total_len += split_len + (len(separator) if len(current_doc) > 1 else 0)
 
-        # Save any remaining text
+        # Flush any remaining text in the buffer
         if current_doc:
             merged = separator.join(current_doc).strip()
             if merged:

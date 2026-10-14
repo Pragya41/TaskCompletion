@@ -16,8 +16,13 @@ class BookingService:
         db: AsyncSession,
         booking_in: BookingCreate,
     ) -> Booking:
-        """Persists a new interview booking in the database."""
+        """SQL interview persistence:
+        Creates a new Booking entity record from validated candidate details (name, email,
+        future date, valid time). Uses an explicit transaction with rollback on failure
+        to guarantee database consistency.
+        """
         try:
+            # Map validated schema into SQLAlchemy model instance
             booking = Booking(
                 session_id=booking_in.session_id,
                 name=booking_in.name.strip(),
@@ -27,6 +32,7 @@ class BookingService:
                 status="CONFIRMED",
                 notes=booking_in.notes,
             )
+            # Add to async database session and commit transaction
             db.add(booking)
             await db.commit()
             await db.refresh(booking)
@@ -35,6 +41,7 @@ class BookingService:
             )
             return booking
         except Exception as e:
+            # Roll back on any SQL or connection error to avoid leaving transaction in error state
             await db.rollback()
             logger.error(f"Failed to create booking: {e}", exc_info=True)
             raise BookingError(f"Failed to store interview booking: {str(e)}") from e
