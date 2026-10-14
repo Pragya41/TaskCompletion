@@ -30,7 +30,14 @@ async def test_redis_chat_memory_lifecycle():
     assert "User: Hello Palm Mind AI!" in formatted
     assert "Assistant: Greetings! How can I help you today?" in formatted
 
-    # 5. Clear history
+    # 5. Session state flag testing (e.g. BOOKING_IN_PROGRESS)
+    assert await chat_memory.get_session_state(session_id) is None
+    await chat_memory.set_session_state(session_id, "BOOKING_IN_PROGRESS")
+    assert await chat_memory.get_session_state(session_id) == "BOOKING_IN_PROGRESS"
+    await chat_memory.clear_session_state(session_id)
+    assert await chat_memory.get_session_state(session_id) is None
+
+    # 6. Clear history
     cleared = await chat_memory.clear_history(session_id)
     assert cleared is True
 

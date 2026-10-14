@@ -143,3 +143,21 @@ async def test_conversational_interview_booking_endpoint(client: AsyncClient):
     )
     assert resp_followup.status_code == 200
     assert resp_followup.json()["booking"] is None
+
+
+@pytest.mark.asyncio
+async def test_conversational_booking_invalid_date_graceful_reply(client: AsyncClient):
+    """Test that submitting a past date in chat replies with a helpful conversational error instead of 500."""
+    session_id = "invalid-date-session"
+
+    payload = {
+        "session_id": session_id,
+        "query": "I want to schedule an interview for John, email john@example.com on 2020-01-01 at 14:00.",
+    }
+    resp = await client.post("/api/v1/chat", json=payload)
+    # Must NOT return 500 error!
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["booking"] is None
+    # Politeness and clarity check
+    assert "cannot be in the past" in data["response"] or "future date" in data["response"].lower()

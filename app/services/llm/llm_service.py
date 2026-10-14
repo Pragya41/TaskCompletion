@@ -161,6 +161,7 @@ class LLMService:
         name_patterns = [
             r"(?:my name is|i am|name:)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
             r"(?:for candidate|candidate:?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)",
+            r"\bfor\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b",
         ]
         for pattern in name_patterns:
             n_match = re.search(pattern, text, re.IGNORECASE)

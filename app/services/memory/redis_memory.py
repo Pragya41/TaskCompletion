@@ -11,7 +11,7 @@ from app.schemas.chat import ChatMessage, ChatRole
 
 
 class RedisChatMemory:
-    """Manages chat history in Redis with automatic TTL and fakeredis fallback."""
+    """Manages chat history and session dialogue state in Redis with automatic TTL and fakeredis fallback."""
 
     def __init__(self):
         self._client: Optional[aioredis.Redis] = None
@@ -51,6 +51,10 @@ class RedisChatMemory:
     def _get_key(self, session_id: str) -> str:
         """Redis key for session messages."""
         return f"palm_mind:chat:{session_id}:messages"
+
+    def _get_state_key(self, session_id: str) -> str:
+        """Redis key for session state (e.g. BOOKING_IN_PROGRESS)."""
+        return f"palm_mind:chat:{session_id}:state"
 
     async def add_message(
         self,
@@ -130,11 +134,42 @@ class RedisChatMemory:
 
         return "\n".join(formatted_lines)
 
+    async def get_session_state(self, session_id: str) -> Optional[str]:
+        """Retrieves conversational state flag from Redis (e.g. 'BOOKING_IN_PROGRESS')."""
+        client = await self.get_client()
+        key = self._get_state_key(session_id)
+        try:
+            val = await client.get(key)
+            return str(val) if val is not None else None
+        except Exception as e:
+            logger.warning(f"Error reading session state for {session_id}: {e}")
+            return None
+
+    async def set_session_state(self, session_id: str, state: str) -> None:
+        """Persists conversational state flag in Redis with TTL."""
+        client = await self.get_client()
+        key = self._get_state_key(session_id)
+        try:
+            await client.set(key, state, ex=settings.REDIS_CHAT_TTL_SECONDS)
+        except Exception as e:
+            logger.warning(f"Error setting session state for {session_id}: {e}")
+
+    async def clear_session_state(self, session_id: str) -> None:
+        """Deletes conversational state flag from Redis."""
+        client = await self.get_client()
+        key = self._get_state_key(session_id)
+        try:
+            await client.delete(key)
+        except Exception as e:
+            logger.warning(f"Error clearing session state for {session_id}: {e}")
+
     async def clear_history(self, session_id: str) -> bool:
-        """Delete all chat history for a session."""
+        """Delete all chat history and state for a session."""
         client = await self.get_client()
         key = self._get_key(session_id)
+        state_key = self._get_state_key(session_id)
         try:
+            await client.delete(state_key)
             res = await client.delete(key)
             return bool(res)
         except Exception as e:

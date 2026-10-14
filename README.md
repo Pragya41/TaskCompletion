@@ -374,28 +374,32 @@ tests/test_api_endpoints.py::test_root PASSED                            [  8%]
 tests/test_api_endpoints.py::test_ingest_txt_file_recursive PASSED       [ 12%]
 tests/test_api_endpoints.py::test_ingest_pdf_file_fixed PASSED           [ 16%]
 tests/test_api_endpoints.py::test_ingest_unsupported_file PASSED         [ 20%]
-tests/test_api_endpoints.py::test_conversational_chat_and_memory PASSED  [ 25%]
-tests/test_api_endpoints.py::test_conversational_interview_booking_endpoint PASSED [ 29%]
-tests/test_booking.py::test_create_and_fetch_booking PASSED              [ 33%]
-tests/test_booking.py::test_booking_validation_past_date PASSED          [ 37%]
-tests/test_booking.py::test_booking_validation_invalid_time PASSED       [ 41%]
-tests/test_booking.py::test_llm_booking_intent_extraction_full PASSED    [ 45%]
-tests/test_booking.py::test_llm_booking_intent_extraction_partial PASSED [ 50%]
-tests/test_booking.py::test_no_false_booking_intent_on_old_history PASSED [ 54%]
-tests/test_chunking.py::test_fixed_size_chunker PASSED                   [ 58%]
-tests/test_chunking.py::test_recursive_character_chunker PASSED          [ 62%]
-tests/test_chunking.py::test_chunker_factory PASSED                      [ 66%]
-tests/test_chunking.py::test_invalid_chunk_overlap PASSED                [ 70%]
-tests/test_extraction.py::test_extract_txt_success PASSED                [ 75%]
-tests/test_extraction.py::test_extract_unsupported_extension PASSED      [ 79%]
-tests/test_extraction.py::test_extract_empty_txt PASSED                  [ 83%]
-tests/test_extraction.py::test_extract_pdf_success PASSED                [ 87%]
-tests/test_rag_pipeline.py::test_rag_pipeline_general_query PASSED       [ 91%]
-tests/test_rag_pipeline.py::test_rag_pipeline_booking_flow PASSED        [ 95%]
+tests/test_api_endpoints.py::test_conversational_chat_and_memory PASSED  [ 24%]
+tests/test_api_endpoints.py::test_conversational_interview_booking_endpoint PASSED [ 28%]
+tests/test_api_endpoints.py::test_conversational_booking_invalid_date_graceful_reply PASSED [ 32%]
+tests/test_booking.py::test_create_and_fetch_booking PASSED              [ 36%]
+tests/test_booking.py::test_booking_validation_past_date PASSED          [ 40%]
+tests/test_booking.py::test_booking_validation_invalid_time PASSED       [ 44%]
+tests/test_booking.py::test_llm_booking_intent_extraction_full PASSED    [ 48%]
+tests/test_booking.py::test_llm_booking_intent_extraction_partial PASSED [ 52%]
+tests/test_booking.py::test_no_false_booking_intent_on_old_history PASSED [ 56%]
+tests/test_chunking.py::test_fixed_size_chunker PASSED                   [ 60%]
+tests/test_chunking.py::test_recursive_character_chunker PASSED          [ 64%]
+tests/test_chunking.py::test_chunker_factory PASSED                      [ 68%]
+tests/test_chunking.py::test_invalid_chunk_overlap PASSED                [ 72%]
+tests/test_extraction.py::test_extract_txt_success PASSED                [ 76%]
+tests/test_extraction.py::test_extract_unsupported_extension PASSED      [ 80%]
+tests/test_extraction.py::test_extract_empty_txt PASSED                  [ 84%]
+tests/test_extraction.py::test_extract_pdf_success PASSED                [ 88%]
+tests/test_rag_pipeline.py::test_rag_pipeline_general_query PASSED       [ 92%]
+tests/test_rag_pipeline.py::test_rag_pipeline_booking_flow PASSED        [ 96%]
 tests/test_redis_memory.py::test_redis_chat_memory_lifecycle PASSED      [100%]
 
-============================== 24 passed in 0.23s ==============================
+============================== 25 passed in 0.28s ==============================
 ```
+
+> **Note on Conversational State Tracking in Redis**:
+> The RAG pipeline tracks dialogue state in Redis via a lightweight session key (`palm_mind:chat:{session_id}:state` set to `BOOKING_IN_PROGRESS`). If a user initiates a booking but provides incomplete info or an invalid date (e.g., in the past), the state remains active so subsequent user responses seamlessly fill in the missing details. Once confirmed, the state flag is cleared to prevent false booking triggers on future conversational turns.
 
 ---
 
