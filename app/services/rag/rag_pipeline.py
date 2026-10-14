@@ -29,28 +29,43 @@ class ConversationalRAGPipeline:
         session_id = request.session_id
         raw_query = request.query.strip()
 
-        # 1. Get recent chat history from Redis
+        # 1. Get recent chat messages from Redis to inspect dialogue state
+        recent_messages = await chat_memory.get_messages(session_id, limit=6)
         chat_history = await chat_memory.get_formatted_history(session_id, limit=6)
 
-        # 2. Save the user's message into Redis
+        # 2. Determine if a booking conversation is currently in progress
+        # A booking is in progress ONLY if the previous assistant message asked for missing booking details
+        is_booking_in_progress = False
+        if recent_messages:
+            last_msg = recent_messages[-1]
+            if last_msg.role == ChatRole.ASSISTANT:
+                # If assistant asked for missing details in the previous turn, booking is active
+                if "missing details:" in last_msg.content or "schedule your interview" in last_msg.content:
+                    # But if it was already confirmed, it is not in progress
+                    if "scheduled successfully" not in last_msg.content:
+                        is_booking_in_progress = True
+
+        # 3. Save the user's message into Redis
         await chat_memory.add_message(
             session_id=session_id,
             role=ChatRole.USER,
             content=raw_query,
         )
 
-        # 3. Check if the user is asking to book an interview
+        # 4. Check for interview booking intent
+        # If not in progress, only the latest query triggers booking intent (prevents re-triggering on old history)
         booking_intent = await llm_service.extract_booking_intent(
             query=raw_query,
+            is_booking_in_progress=is_booking_in_progress,
             chat_history=chat_history,
         )
 
         if booking_intent.is_booking_intent:
-            # Case A: All required details (name, email, date, time) are provided
+            # Case A: All required details (name, email, date, time) are present
             if not booking_intent.missing_fields and booking_intent.name and booking_intent.email and booking_intent.date and booking_intent.time:
-                logger.info(f"Booking interview for session {session_id}")
+                logger.info(f"Booking interview for candidate {booking_intent.name} (session: {session_id})")
 
-                # Save the booking in the database
+                # Save the booking in the SQL database
                 booking_in = BookingCreate(
                     name=booking_intent.name,
                     email=booking_intent.email,
@@ -61,7 +76,7 @@ class ConversationalRAGPipeline:
                 )
                 booking_record = await booking_service.create_booking(db=db, booking_in=booking_in)
 
-                # Prepare confirmation message for the candidate
+                # Prepare confirmation message for candidate
                 confirmation_msg = (
                     f"Your interview has been scheduled successfully!\n\n"
                     f"• Candidate: {booking_record.name}\n"
@@ -73,7 +88,7 @@ class ConversationalRAGPipeline:
                     f"A confirmation has been recorded. Please let me know if you need to reschedule or have any questions about the position."
                 )
 
-                # Save the assistant response in Redis
+                # Save the assistant response in Redis (marks booking as completed)
                 await chat_memory.add_message(
                     session_id=session_id,
                     role=ChatRole.ASSISTANT,
@@ -89,14 +104,14 @@ class ConversationalRAGPipeline:
                     booking=BookingResponse.model_validate(booking_record),
                 )
             else:
-                # Case B: Some details are missing, ask the user to provide them
+                # Case B: Some details are missing; prompt the user for the missing fields
                 missing_str = ", ".join(booking_intent.missing_fields)
                 clarification_msg = (
                     f"I would be glad to help schedule your interview! To confirm the reservation, "
                     f"could you please provide the following missing details: {missing_str}?"
                 )
 
-                # Save assistant question in Redis
+                # Save assistant clarification request in Redis
                 await chat_memory.add_message(
                     session_id=session_id,
                     role=ChatRole.ASSISTANT,
@@ -112,13 +127,13 @@ class ConversationalRAGPipeline:
                     booking=None,
                 )
 
-        # 4. If not a booking, rewrite the query using conversation history for better search
+        # 5. If not a booking, rewrite the query using conversation history for better search
         rewritten_query = await llm_service.rewrite_query(
             query=raw_query,
             chat_history=chat_history,
         )
 
-        # 5. Convert query to vector embedding and search Qdrant for matching chunks
+        # 6. Convert query to vector embedding and search Qdrant for matching chunks
         query_vector = await embedding_service.embed_query(rewritten_query)
         retrieved_hits = await vector_store.search(
             query_vector=query_vector,
@@ -126,7 +141,7 @@ class ConversationalRAGPipeline:
             document_id=request.document_id,
         )
 
-        # 6. Build the sources list for citations
+        # 7. Build sources list for citations
         sources = [
             RetrievedSource(
                 document_id=hit["document_id"],
@@ -138,14 +153,14 @@ class ConversationalRAGPipeline:
             for hit in retrieved_hits
         ]
 
-        # 7. Generate grounded answer with LLM using the retrieved chunks
+        # 8. Generate grounded answer with LLM using the retrieved chunks
         answer = await llm_service.generate_rag_answer(
             query=rewritten_query,
             context_chunks=retrieved_hits,
             chat_history=chat_history,
         )
 
-        # 8. Save the final assistant answer into Redis
+        # 9. Save the final assistant answer into Redis
         await chat_memory.add_message(
             session_id=session_id,
             role=ChatRole.ASSISTANT,

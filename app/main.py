@@ -1,14 +1,15 @@
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, Dict
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
 from app.core.exceptions import AppBaseException
 from app.core.logging import logger, setup_logging
-from app.db.session import init_db
+from app.db.session import engine, init_db
 from app.services.memory import chat_memory
 from app.services.vector_store import vector_store
 
@@ -81,6 +82,19 @@ async def domain_exception_handler(request: Request, exc: AppBaseException) -> J
     )
 
 
+# Unhandled Exception Handler: Never return raw str(e) on 500 errors to prevent leaking internal traces
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(f"Unhandled internal exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "InternalServerError",
+            "message": "An internal server error occurred while processing the request.",
+        },
+    )
+
+
 @app.get("/", tags=["Root"])
 async def root() -> dict:
     """Root endpoint welcoming the evaluator with system status and documentation links."""
@@ -95,15 +109,48 @@ async def root() -> dict:
 
 
 @app.get("/health", tags=["Health"])
-async def health_check() -> dict:
-    """Health check endpoint inspecting Database, Redis, and Vector DB status."""
-    health_status = {
+async def health_check() -> JSONResponse:
+    """Health check endpoint that actively pings Database, Redis, and Qdrant."""
+    health_details: Dict[str, Any] = {
         "status": "healthy",
-        "database": "connected",
-        "redis_memory": "active",
-        "vector_store": "ready",
+        "database": "unknown",
+        "redis": "unknown",
+        "qdrant": "unknown",
     }
-    return health_status
+    is_healthy = True
+
+    # 1. Ping Database
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        health_details["database"] = "connected"
+    except Exception as e:
+        logger.warning(f"Health check: Database ping failed ({e})")
+        health_details["database"] = "unhealthy"
+        is_healthy = False
+
+    # 2. Ping Redis
+    try:
+        client = await chat_memory.get_client()
+        pong = await client.ping()
+        health_details["redis"] = "connected" if pong else "unresponsive"
+    except Exception as e:
+        logger.warning(f"Health check: Redis ping failed ({e})")
+        health_details["redis"] = "unhealthy"
+        is_healthy = False
+
+    # 3. Ping Qdrant
+    try:
+        vector_store.client.get_collections()
+        health_details["qdrant"] = "connected"
+    except Exception as e:
+        logger.warning(f"Health check: Qdrant ping failed ({e})")
+        health_details["qdrant"] = "unhealthy"
+        is_healthy = False
+
+    health_details["status"] = "healthy" if is_healthy else "degraded"
+    status_code = status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(status_code=status_code, content=health_details)
 
 
 # Include API v1 router

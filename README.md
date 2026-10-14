@@ -153,13 +153,9 @@ The backend provides two selectable chunking strategies via the `chunking_strate
 
 ## Getting Started
 
-### Option A: Local Quickstart (Zero-Friction, No Docker Needed)
+### Option A: Local Development (Recommended)
 
-The application has been engineered to run locally with zero external dependencies required:
-- Uses **Async SQLite** by default.
-- Uses **Embedded Qdrant** (stored locally in `./qdrant_storage`).
-- Uses **In-Memory Redis** (via `fakeredis`) if a standalone Redis instance is not running.
-- Uses **Deterministic Mock LLM / Embeddings** if no `OPENAI_API_KEY` is provided, enabling instant testing.
+Run standalone Qdrant and Redis using Docker Compose, while running FastAPI locally for active development and inspection:
 
 ```bash
 # 1. Clone repository
@@ -173,11 +169,14 @@ source .venv/bin/activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. (Optional) Provide your OpenAI API key in .env
+# 4. Copy environment configuration and supply your OpenAI API key
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY="sk-..." if desired
+# Set OPENAI_API_KEY="sk-..." in .env
 
-# 5. Start the FastAPI development server
+# 5. Spin up standalone Qdrant and Redis services
+docker compose up -d qdrant redis
+
+# 6. Start the FastAPI development server
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -371,28 +370,31 @@ pytest -v
 **Test Execution Results:**
 ```
 tests/test_api_endpoints.py::test_health_check PASSED                    [  4%]
-tests/test_api_endpoints.py::test_root PASSED                            [  9%]
-tests/test_api_endpoints.py::test_ingest_txt_file_recursive PASSED       [ 14%]
-tests/test_api_endpoints.py::test_ingest_pdf_file_fixed PASSED           [ 19%]
-tests/test_api_endpoints.py::test_ingest_unsupported_file PASSED         [ 23%]
-tests/test_api_endpoints.py::test_conversational_chat_and_memory PASSED  [ 28%]
-tests/test_api_endpoints.py::test_conversational_interview_booking_endpoint PASSED [ 33%]
-tests/test_booking.py::test_create_and_fetch_booking PASSED              [ 38%]
-tests/test_booking.py::test_llm_booking_intent_extraction_full PASSED    [ 42%]
-tests/test_booking.py::test_llm_booking_intent_extraction_partial PASSED [ 47%]
-tests/test_chunking.py::test_fixed_size_chunker PASSED                   [ 52%]
-tests/test_chunking.py::test_recursive_character_chunker PASSED          [ 57%]
-tests/test_chunking.py::test_chunker_factory PASSED                      [ 61%]
-tests/test_chunking.py::test_invalid_chunk_overlap PASSED                [ 66%]
-tests/test_extraction.py::test_extract_txt_success PASSED                [ 71%]
-tests/test_extraction.py::test_extract_unsupported_extension PASSED      [ 76%]
-tests/test_extraction.py::test_extract_empty_txt PASSED                  [ 80%]
-tests/test_extraction.py::test_extract_pdf_success PASSED                [ 85%]
-tests/test_rag_pipeline.py::test_rag_pipeline_general_query PASSED       [ 90%]
+tests/test_api_endpoints.py::test_root PASSED                            [  8%]
+tests/test_api_endpoints.py::test_ingest_txt_file_recursive PASSED       [ 12%]
+tests/test_api_endpoints.py::test_ingest_pdf_file_fixed PASSED           [ 16%]
+tests/test_api_endpoints.py::test_ingest_unsupported_file PASSED         [ 20%]
+tests/test_api_endpoints.py::test_conversational_chat_and_memory PASSED  [ 25%]
+tests/test_api_endpoints.py::test_conversational_interview_booking_endpoint PASSED [ 29%]
+tests/test_booking.py::test_create_and_fetch_booking PASSED              [ 33%]
+tests/test_booking.py::test_booking_validation_past_date PASSED          [ 37%]
+tests/test_booking.py::test_booking_validation_invalid_time PASSED       [ 41%]
+tests/test_booking.py::test_llm_booking_intent_extraction_full PASSED    [ 45%]
+tests/test_booking.py::test_llm_booking_intent_extraction_partial PASSED [ 50%]
+tests/test_booking.py::test_no_false_booking_intent_on_old_history PASSED [ 54%]
+tests/test_chunking.py::test_fixed_size_chunker PASSED                   [ 58%]
+tests/test_chunking.py::test_recursive_character_chunker PASSED          [ 62%]
+tests/test_chunking.py::test_chunker_factory PASSED                      [ 66%]
+tests/test_chunking.py::test_invalid_chunk_overlap PASSED                [ 70%]
+tests/test_extraction.py::test_extract_txt_success PASSED                [ 75%]
+tests/test_extraction.py::test_extract_unsupported_extension PASSED      [ 79%]
+tests/test_extraction.py::test_extract_empty_txt PASSED                  [ 83%]
+tests/test_extraction.py::test_extract_pdf_success PASSED                [ 87%]
+tests/test_rag_pipeline.py::test_rag_pipeline_general_query PASSED       [ 91%]
 tests/test_rag_pipeline.py::test_rag_pipeline_booking_flow PASSED        [ 95%]
 tests/test_redis_memory.py::test_redis_chat_memory_lifecycle PASSED      [100%]
 
-============================== 21 passed in 0.21s ==============================
+============================== 24 passed in 0.23s ==============================
 ```
 
 ---

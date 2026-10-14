@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppBaseException, DocumentExtractionError, InvalidFileTypeError
+from app.core.logging import logger
 from app.db.session import get_db
 from app.schemas.ingestion import (
     ChunkInfo,
@@ -68,9 +69,10 @@ async def ingest_document(
     except AppBaseException as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
+        logger.error(f"Unexpected error during document ingestion: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred during ingestion: {str(e)}",
+            detail="An internal server error occurred while ingesting the document.",
         )
 
 

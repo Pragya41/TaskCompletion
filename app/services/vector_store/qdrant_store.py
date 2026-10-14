@@ -32,10 +32,11 @@ class QdrantVectorStore:
         """Connect to remote Qdrant URL if provided, otherwise use local disk storage."""
         if settings.QDRANT_URL:
             logger.info(f"Connecting to remote Qdrant at: {settings.QDRANT_URL}")
+            # Ensure timeout is typed as an int to satisfy mypy
             return QdrantClient(
                 url=settings.QDRANT_URL,
                 api_key=settings.QDRANT_API_KEY,
-                timeout=30.0,
+                timeout=30,
             )
         else:
             logger.info(f"Using embedded Qdrant storage at: {settings.QDRANT_EMBEDDED_PATH}")

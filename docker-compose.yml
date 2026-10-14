@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   api:
     build:
@@ -22,7 +20,8 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - EMBEDDING_MODEL=text-embedding-3-small
       - LLM_MODEL=gpt-4o-mini
-      - MOCK_LLM_IF_NO_KEY=true
+      - MOCK_LLM_IF_NO_KEY=false
+      - ALLOW_IN_MEMORY_REDIS_FALLBACK=false
     depends_on:
       postgres:
         condition: service_healthy

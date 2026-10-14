@@ -1,10 +1,10 @@
 import hashlib
-import math
 from typing import List, Optional
 import numpy as np
-
 from openai import AsyncOpenAI
+
 from app.core.config import settings
+from app.core.exceptions import AppBaseException
 from app.core.logging import logger
 
 
@@ -18,22 +18,23 @@ class EmbeddingService:
         model: Optional[str] = None,
         dimension: Optional[int] = None,
     ):
-        self.api_key = api_key or settings.OPENAI_API_KEY
-        self.base_url = base_url or settings.OPENAI_BASE_URL
-        self.model = model or settings.EMBEDDING_MODEL
-        self.dimension = dimension or settings.VECTOR_DIMENSION
+        self.api_key: Optional[str] = api_key or settings.OPENAI_API_KEY
+        self.base_url: Optional[str] = base_url or settings.OPENAI_BASE_URL
+        self.model: str = model or settings.EMBEDDING_MODEL
+        self.dimension: int = dimension or settings.VECTOR_DIMENSION
 
+        # Type explicitly as Optional[AsyncOpenAI] to resolve mypy error
+        self.client: Optional[AsyncOpenAI] = None
         if self.api_key:
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-        else:
-            self.client = None
 
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generates embeddings for a batch of text chunks."""
+        """Generates embeddings for a batch of text chunks using OpenAI."""
         if not texts:
             return []
 
-        if self.client:
+        # 1. Use real OpenAI embeddings if client is configured
+        if self.client is not None:
             try:
                 response = await self.client.embeddings.create(
                     input=texts,
@@ -41,14 +42,20 @@ class EmbeddingService:
                 )
                 return [data.embedding for data in response.data]
             except Exception as e:
-                logger.warning(
-                    f"OpenAI embedding call failed ({e}). Falling back to deterministic embedding generation."
-                )
-                if not settings.MOCK_LLM_IF_NO_KEY:
-                    raise
+                logger.error(f"OpenAI embedding generation failed: {e}", exc_info=True)
+                # Never silently fall back if a real key was provided; fail loudly to avoid corrupting vectors
+                raise AppBaseException(f"Failed to generate OpenAI embeddings: {str(e)}") from e
 
-        # Deterministic mock embeddings for offline / zero-key testing
-        return [self._generate_deterministic_vector(text) for text in texts]
+        # 2. If no API key is provided, check if mock mode is explicitly permitted (test suite only)
+        if settings.MOCK_LLM_IF_NO_KEY:
+            logger.debug("Generating deterministic unit embeddings for offline testing.")
+            return [self._generate_deterministic_vector(text) for text in texts]
+
+        # 3. Otherwise raise clear error instructing the user to configure OPENAI_API_KEY
+        raise AppBaseException(
+            "OPENAI_API_KEY is not configured. Please supply a valid OpenAI API key in your .env file "
+            "to generate embeddings with text-embedding-3-small."
+        )
 
     async def embed_query(self, query: str) -> List[float]:
         """Generates an embedding vector for a search query."""
@@ -56,17 +63,13 @@ class EmbeddingService:
         return results[0]
 
     def _generate_deterministic_vector(self, text: str) -> List[float]:
-        """Generates a pseudo-random, deterministic unit vector from text tokens.
-
-        Allows testing vector search and cosine similarity offline without API keys.
-        """
+        """Generates a pseudo-random, deterministic unit vector from text tokens for offline testing."""
         vector = np.zeros(self.dimension, dtype=np.float32)
         words = text.lower().split()
         if not words:
             words = ["empty"]
 
         for word in words:
-            # Hash word into pseudo-random index and sign
             h = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16)
             idx = h % self.dimension
             sign = 1.0 if ((h >> 4) % 2 == 0) else -1.0

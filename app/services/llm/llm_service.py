@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 from openai import AsyncOpenAI
 
 from app.core.config import settings
-from app.core.exceptions import LLMServiceError
+from app.core.exceptions import AppBaseException, LLMServiceError
 from app.core.logging import logger
 from app.schemas.booking import BookingIntentExtraction
 
@@ -18,23 +18,21 @@ class LLMService:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
     ):
-        self.api_key = api_key or settings.OPENAI_API_KEY
-        self.base_url = base_url or settings.OPENAI_BASE_URL
-        self.model = model or settings.LLM_MODEL
+        self.api_key: Optional[str] = api_key or settings.OPENAI_API_KEY
+        self.base_url: Optional[str] = base_url or settings.OPENAI_BASE_URL
+        self.model: str = model or settings.LLM_MODEL
 
-        # Initialize OpenAI client if key is available
+        # Type explicitly as Optional[AsyncOpenAI] to resolve mypy error
+        self.client: Optional[AsyncOpenAI] = None
         if self.api_key:
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
-        else:
-            self.client = None
 
     async def rewrite_query(self, query: str, chat_history: str) -> str:
         """Rewrite a follow-up query into a standalone question using chat history."""
-        # If no history, the question is already standalone
         if not chat_history.strip():
             return query
 
-        if self.client:
+        if self.client is not None:
             prompt = (
                 "You are an AI search query optimizer. Given the following conversation history and a user's latest query, "
                 "rephrase the latest query into a standalone, clear search query that incorporates necessary context from the history. "
@@ -54,26 +52,43 @@ class LLMService:
                 if rewritten and rewritten.strip():
                     return rewritten.strip().strip('"')
             except Exception as e:
-                logger.warning(f"LLM rewrite query failed ({e}). Using raw query.")
+                logger.error(f"LLM rewrite query failed: {e}", exc_info=True)
+                if not settings.MOCK_LLM_IF_NO_KEY:
+                    raise LLMServiceError(f"Query rewriting failed: {str(e)}") from e
 
         return query
 
     async def extract_booking_intent(
-        self, query: str, chat_history: str = ""
+        self,
+        query: str,
+        is_booking_in_progress: bool = False,
+        chat_history: str = "",
     ) -> BookingIntentExtraction:
-        """Detect if the user wants to book an interview and extract name, email, date, time."""
-        full_conversation = f"{chat_history}\nUser: {query}".strip()
+        """Detect if user is booking an interview.
 
-        # Try LLM structured extraction first
-        if self.client:
+        Fixes Bug 4: Does NOT scan the whole chat history for booking intent unless a booking is currently in progress.
+        If a booking is not in progress, only the user's latest query determines booking intent.
+        """
+        # Determine context to analyze
+        if is_booking_in_progress:
+            # Booking is in progress (assistant just asked for missing details); check combined context
+            context_to_analyze = f"{chat_history}\nUser: {query}".strip()
+        else:
+            # No booking in progress; only examine the latest user query for intent
+            context_to_analyze = query.strip()
+
+        # 1. Real LLM structured extraction via JSON mode
+        if self.client is not None:
             system_prompt = (
-                "You are an interview booking assistant. Analyze the conversation and user's query to determine if they want to book or schedule an interview.\n"
+                "You are an interview booking assistant. Analyze the user's input to determine if they want to book or schedule an interview, "
+                "or are answering a previous question about booking details (name, email, date, time).\n"
+                f"Booking in progress state: {is_booking_in_progress}\n\n"
                 "Extract the following fields if provided:\n"
-                "- name: Full name\n"
-                "- email: Email address\n"
-                "- date: Date formatted as YYYY-MM-DD (e.g. 2026-10-25)\n"
+                "- name: Full candidate name\n"
+                "- email: Valid email address\n"
+                "- date: Date formatted as YYYY-MM-DD\n"
                 "- time: Preferred time (e.g. 14:00 or 2:00 PM)\n\n"
-                "Return a strict JSON object with keys:\n"
+                "Return a strict JSON object:\n"
                 "{\n"
                 '  "is_booking_intent": boolean,\n'
                 '  "name": string or null,\n'
@@ -88,7 +103,7 @@ class LLMService:
                     model=self.model,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Analyze this user query in context:\n{full_conversation}"},
+                        {"role": "user", "content": f"Input:\n{context_to_analyze}"},
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.0,
@@ -98,21 +113,29 @@ class LLMService:
                     data = json.loads(content)
                     return BookingIntentExtraction(**data)
             except Exception as e:
-                logger.warning(f"LLM booking extraction failed ({e}). Falling back to pattern extraction.")
+                logger.error(f"LLM booking extraction failed: {e}", exc_info=True)
+                if not settings.MOCK_LLM_IF_NO_KEY:
+                    raise LLMServiceError(f"Interview booking extraction failed: {str(e)}") from e
 
-        # Fallback regex pattern matching for offline/test mode
-        return self._heuristic_extract_booking(query, chat_history)
+        # 2. Heuristic fallback (for test suite or zero-key mode)
+        return self._heuristic_extract_booking(query, is_booking_in_progress, chat_history)
 
-    def _heuristic_extract_booking(self, query: str, chat_history: str) -> BookingIntentExtraction:
-        """Simple pattern matching to extract booking info when LLM is unavailable."""
-        combined_text = f"{chat_history} {query}".lower()
+    def _heuristic_extract_booking(
+        self,
+        query: str,
+        is_booking_in_progress: bool,
+        chat_history: str,
+    ) -> BookingIntentExtraction:
+        """Deterministic pattern matching to extract booking info without false-triggering on old history."""
         booking_keywords = ["interview", "book", "schedule", "reserve", "slot", "appointment", "meeting"]
-        has_intent = any(keyword in combined_text for keyword in booking_keywords)
+        has_direct_intent = any(keyword in query.lower() for keyword in booking_keywords)
 
-        if not has_intent:
+        # Only trigger booking intent if current query has intent OR booking was already in progress
+        if not has_direct_intent and not is_booking_in_progress:
             return BookingIntentExtraction(is_booking_intent=False, missing_fields=[])
 
-        text = f"{chat_history}\n{query}"
+        # Text to search for parameters: include recent history if booking was in progress
+        text = f"{chat_history}\n{query}" if is_booking_in_progress else query
 
         # 1. Extract email
         email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
@@ -199,8 +222,8 @@ class LLMService:
             user_content += f"Conversation History:\n{chat_history}\n\n"
         user_content += f"User Question: {query}"
 
-        # Call OpenAI LLM
-        if self.client:
+        # Call real OpenAI LLM
+        if self.client is not None:
             try:
                 response = await self.client.chat.completions.create(
                     model=self.model,
@@ -214,21 +237,26 @@ class LLMService:
                 if answer and answer.strip():
                     return answer.strip()
             except Exception as e:
-                logger.warning(f"OpenAI completion call failed ({e}). Falling back to synthesized answer.")
+                logger.error(f"OpenAI completion call failed: {e}", exc_info=True)
                 if not settings.MOCK_LLM_IF_NO_KEY:
-                    raise LLMServiceError(f"LLM generation failed: {str(e)}") from e
+                    raise LLMServiceError(f"OpenAI generation failed: {str(e)}") from e
 
-        # Mock fallback answer for offline testing
-        if context_chunks:
-            top_chunk = context_chunks[0]
-            sources_cited = ", ".join(f"[{i+1}]" for i in range(len(context_chunks)))
-            return (
-                f"Based on the provided documents {sources_cited}:\n\n"
-                f"{top_chunk.get('text', '').strip()[:350]}...\n\n"
-                f"(Retrieved from '{top_chunk.get('filename')}', chunk index {top_chunk.get('chunk_index')})"
-            )
-        else:
-            return "Hello! I am Palm Mind AI assistant. How may I assist you with your documents or interview booking today?"
+        # Mock fallback answer only for offline testing
+        if settings.MOCK_LLM_IF_NO_KEY:
+            if context_chunks:
+                top_chunk = context_chunks[0]
+                sources_cited = ", ".join(f"[{i+1}]" for i in range(len(context_chunks)))
+                return (
+                    f"Based on the provided documents {sources_cited}:\n\n"
+                    f"{top_chunk.get('text', '').strip()[:350]}...\n\n"
+                    f"(Retrieved from '{top_chunk.get('filename')}', chunk index {top_chunk.get('chunk_index')})"
+                )
+            else:
+                return "Hello! I am Palm Mind AI assistant. How may I assist you with your documents or interview booking today?"
+
+        raise AppBaseException(
+            "OPENAI_API_KEY is not configured. Please supply a valid OpenAI API key in your .env file."
+        )
 
 
 # Singleton instance

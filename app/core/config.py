@@ -36,14 +36,14 @@ class Settings(BaseSettings):
         description="TTL for chat session history in Redis (seconds)",
     )
     ALLOW_IN_MEMORY_REDIS_FALLBACK: bool = Field(
-        default=True,
-        description="If true, seamlessly falls back to fakeredis when no standalone Redis instance is running",
+        default=False,
+        description="Require real Redis by default; set to True only in offline testing environments",
     )
 
     # Vector Database: Qdrant
     QDRANT_URL: Optional[str] = Field(
-        default=None,
-        description="Remote Qdrant URL (e.g. http://localhost:6333). If None or empty, uses local embedded storage",
+        default="http://localhost:6333",
+        description="Remote/Docker Qdrant URL (e.g. http://localhost:6333). If None or empty, uses local embedded storage",
     )
     QDRANT_API_KEY: Optional[str] = Field(
         default=None,
@@ -55,33 +55,33 @@ class Settings(BaseSettings):
     )
     QDRANT_EMBEDDED_PATH: str = Field(
         default="./qdrant_storage",
-        description="Local directory for embedded Qdrant persistence when QDRANT_URL is not set",
+        description="Local directory for embedded Qdrant persistence when QDRANT_URL is empty",
     )
     VECTOR_DIMENSION: int = Field(
         default=1536,
-        description="Embedding dimension (1536 for text-embedding-3-small)",
+        description="Embedding dimension (1536 for OpenAI text-embedding-3-small)",
     )
 
     # LLM & Embedding Settings
     OPENAI_API_KEY: Optional[str] = Field(
         default=None,
-        description="OpenAI API key (or compatible service API key)",
+        description="OpenAI API key (required for production embeddings and RAG answer generation)",
     )
     OPENAI_BASE_URL: Optional[str] = Field(
         default=None,
-        description="Custom base URL for OpenAI-compatible APIs (e.g. Ollama, OpenRouter)",
+        description="Custom base URL for OpenAI-compatible APIs (if applicable)",
     )
     EMBEDDING_MODEL: str = Field(
         default="text-embedding-3-small",
-        description="Embedding model name",
+        description="Embedding model name (1536-dim)",
     )
     LLM_MODEL: str = Field(
         default="gpt-4o-mini",
         description="Chat LLM model name",
     )
     MOCK_LLM_IF_NO_KEY: bool = Field(
-        default=True,
-        description="If True and OPENAI_API_KEY is not provided, provides deterministic intelligent mock responses for seamless local evaluation",
+        default=False,
+        description="Set to false so missing API keys or OpenAI errors are never silently masked",
     )
 
     # Document Ingestion Defaults

@@ -9,6 +9,9 @@ async def test_health_check(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "healthy"
+    assert data["database"] == "connected"
+    assert data["redis"] == "connected"
+    assert data["qdrant"] == "connected"
 
 
 @pytest.mark.asyncio
@@ -132,3 +135,11 @@ async def test_conversational_interview_booking_endpoint(client: AsyncClient):
     b_resp = await client.get(f"/api/v1/bookings/{booking_id}")
     assert b_resp.status_code == 200
     assert b_resp.json()["name"] == "Maya Lin"
+
+    # Turn 3: Ask a normal question after booking completed to ensure no false booking trigger!
+    resp_followup = await client.post(
+        "/api/v1/chat",
+        json={"session_id": session_id, "query": "What are your company core values?"},
+    )
+    assert resp_followup.status_code == 200
+    assert resp_followup.json()["booking"] is None
