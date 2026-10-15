@@ -402,9 +402,3 @@ tests/test_redis_memory.py::test_redis_chat_memory_lifecycle PASSED      [100%]
 > The RAG pipeline tracks dialogue state in Redis via a lightweight session key (`palm_mind:chat:{session_id}:state` set to `BOOKING_IN_PROGRESS`). If a user initiates a booking but provides incomplete info or an invalid date (e.g., in the past), the state remains active so subsequent user responses seamlessly fill in the missing details. Once confirmed, the state flag is cleared to prevent false booking triggers on future conversational turns.
 
 ---
-
-## Author & Submission
-
-- **Candidate**: Pragya Dhital
-- **Company**: Palm Mind AI (Palm Mind Technology)
-- **Role**: AI / Backend Engineer Hiring Task
