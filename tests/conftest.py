@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # Override settings for testing
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["ALLOW_IN_MEMORY_REDIS_FALLBACK"] = "True"
+os.environ["REDIS_URL"] = "redis://localhost:1/0"  # unreachable on purpose: tests use in-memory fakeredis, never a real Redis
 os.environ["QDRANT_URL"] = ""  # Force local/in-memory Qdrant
 os.environ["MOCK_LLM_IF_NO_KEY"] = "True"
 os.environ["OPENAI_API_KEY"] = ""  # Force offline deterministic mock embeddings during testing
@@ -35,6 +36,9 @@ test_async_session = async_sessionmaker(
 @pytest_asyncio.fixture(autouse=True)
 async def setup_test_db():
     """Initializes tables before each test and drops them afterwards."""
+    # Each test runs in its own event loop, so never reuse a Redis client from an earlier test
+    chat_memory._client = None
+
     # Ensure vector store collection is ready
     vector_store.ensure_collection()
 
