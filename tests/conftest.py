@@ -10,6 +10,8 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["ALLOW_IN_MEMORY_REDIS_FALLBACK"] = "True"
 os.environ["QDRANT_URL"] = ""  # Force local/in-memory Qdrant
 os.environ["MOCK_LLM_IF_NO_KEY"] = "True"
+os.environ["OPENAI_API_KEY"] = ""  # Force offline deterministic mock embeddings during testing
+os.environ["OPENAI_BASE_URL"] = ""
 
 from app.core.config import settings
 from app.db.base import Base

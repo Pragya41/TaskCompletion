@@ -19,13 +19,14 @@ class LLMService:
         model: Optional[str] = None,
     ):
         self.api_key: Optional[str] = api_key or settings.OPENAI_API_KEY
-        self.base_url: Optional[str] = base_url or settings.OPENAI_BASE_URL
+        raw_base_url = base_url if base_url is not None else settings.OPENAI_BASE_URL
+        self.base_url: Optional[str] = raw_base_url.strip() if (raw_base_url and raw_base_url.strip()) else None
         self.model: str = model or settings.LLM_MODEL
 
-        # Initialize OpenAI client if key is available
+        # Initialize OpenAI client if valid key is available (ignoring placeholder sk-...)
         self.client: Optional[AsyncOpenAI] = None
-        if self.api_key:
-            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        if self.api_key and self.api_key.strip() and self.api_key.strip() != "sk-...":
+            self.client = AsyncOpenAI(api_key=self.api_key.strip(), base_url=self.base_url)
 
     async def rewrite_query(self, query: str, chat_history: str) -> str:
         """Conversational query reformulation:

@@ -19,14 +19,15 @@ class EmbeddingService:
         dimension: Optional[int] = None,
     ):
         self.api_key: Optional[str] = api_key or settings.OPENAI_API_KEY
-        self.base_url: Optional[str] = base_url or settings.OPENAI_BASE_URL
+        raw_base_url = base_url if base_url is not None else settings.OPENAI_BASE_URL
+        self.base_url: Optional[str] = raw_base_url.strip() if (raw_base_url and raw_base_url.strip()) else None
         self.model: str = model or settings.EMBEDDING_MODEL
         self.dimension: int = dimension or settings.VECTOR_DIMENSION
 
-        # Initialize OpenAI async client
+        # Initialize OpenAI async client if valid key is supplied (ignoring placeholder sk-...)
         self.client: Optional[AsyncOpenAI] = None
-        if self.api_key:
-            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        if self.api_key and self.api_key.strip() and self.api_key.strip() != "sk-...":
+            self.client = AsyncOpenAI(api_key=self.api_key.strip(), base_url=self.base_url)
 
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """Generates embeddings for a batch of text chunks using OpenAI."""
