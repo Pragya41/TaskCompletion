@@ -24,10 +24,14 @@ class EmbeddingService:
         self.model: str = model or settings.EMBEDDING_MODEL
         self.dimension: int = dimension or settings.VECTOR_DIMENSION
 
-        # Initialize OpenAI async client if valid key is supplied (ignoring placeholder sk-...)
+        # Placeholder patterns that indicate the key has not been filled in yet
+        _PLACEHOLDER_PATTERNS = ("sk-...", "PASTE_YOUR_AIza_KEY_HERE", "YOUR_API_KEY", "sk-placeholder")
+
+        # Initialize OpenAI async client only when a real key is present
         self.client: Optional[AsyncOpenAI] = None
-        if self.api_key and self.api_key.strip() and self.api_key.strip() != "sk-...":
-            self.client = AsyncOpenAI(api_key=self.api_key.strip(), base_url=self.base_url)
+        stripped_key = (self.api_key or "").strip()
+        if stripped_key and stripped_key not in _PLACEHOLDER_PATTERNS:
+            self.client = AsyncOpenAI(api_key=stripped_key, base_url=self.base_url)
 
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """Generates embeddings for a batch of text chunks using OpenAI."""
@@ -41,7 +45,16 @@ class EmbeddingService:
                     input=texts,
                     model=self.model,
                 )
+                # Guard against malformed/error responses returned as raw strings
+                if not hasattr(response, "data") or not isinstance(response.data, list):
+                    raise AppBaseException(
+                        f"Unexpected response from the embeddings API — expected an EmbeddingResponse "
+                        f"but received {type(response).__name__!r}. "
+                        f"Raw value: {str(response)[:300]}"
+                    )
                 return [data.embedding for data in response.data]
+            except AppBaseException:
+                raise
             except Exception as e:
                 logger.error(f"OpenAI embedding generation failed: {e}", exc_info=True)
                 # Fail loudly to prevent storing fake vectors alongside real embeddings
